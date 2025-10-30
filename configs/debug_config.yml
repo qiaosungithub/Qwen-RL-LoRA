@@ -1,0 +1,69 @@
+training:
+    ############### you need to check every time #################
+    num_epochs: 640
+    batch_size: 8
+    learning_rate: 0.0004
+    sample_per_ep: 40
+    checkpoint_per_epoch: 40
+
+    noise_level: 0.15
+    ema: 0.9996 # only for const schedule
+    ema_halflife_kimg: 2000 # edm
+    ema_schedule: const # or edm
+    ####################### end check ############################
+
+    warmup_steps: 25000 # 20 ep for bs1024
+    log_per_step: 100
+
+    optimizer: adamw
+    adam_b1: 0.9
+    adam_b2: 0.95
+    weight_decay: 0.0
+    label_drop_rate: 0.1
+
+    wandb: False # use this to disable wandb
+    lr_schedule: const
+model:
+    # name: NF_Debug
+    # name: NF_Small_p2_b16_l4 # 121M
+    # name: NF_Small_p2_b4_l16 # 115M
+    # name: NF_Small_p2_b8_l8 # 118M
+    # name: NF_2x_p2_b4_l4 # 117M, performance not good
+    # name: NF_Small_p4_b8_l8 # 117M
+    # name: NF_B_p2_b6_l6 # 120M
+    # name: NF_L_p2_b8_l8 # 461M
+    # name: NF_L_p2_b8_l16 # 409M
+    # name: NF_L_p2_b12_l10 # 391M
+    # name: NF_L_p2_b12_l9_new
+    name: NF_XL_p2_b15_l9
+    # dropout: 0.1
+    # prior_norm: 0.5 # default 1
+    clip_range: 1.0
+    position_embed: rope
+fid:
+    on_use: False
+    fid_times: 10
+    # num_samples: 50000 # 50k
+    num_samples: 5000
+    guidance: 0.0 # 0 for with label
+    guidance_method: ma # ma or x
+    inception_device_batch_size: 400
+
+wandb_notes: ""
+save_by_fid: True
+
+search_cfg: True
+train_and_eval: True
+
+# load_from: /kmh-nfs-ssd-eu-mount/logs/sqa/sqa_Flow_matching/20250411_151116_hts34m_kmh-tpuvm-v3-32-1__b_lr_ep_torchvision_r50_eval/checkpoint_800640 # p2b8l8 160ep
+# load_from: /kmh-nfs-ssd-eu-mount/logs/sqa/sqa_Flow_matching/20250418_141406_ksxsun_kmh-tpuvm-v3-32-13_sqa_NF/checkpoint_800640 # 1024bs, lr8e-4, noise0.1  640ep.
+# load_from: /kmh-nfs-ssd-eu-mount/logs/sqa/sqa_Flow_matching/20250415_025935_ikx82g_kmh-tpuvm-v3-32-5_sqa_NF/checkpoint_400320 # 1024bs, lr8e-4, noise0.05  320ep ema 0.9997
+# load_from: /kmh-nfs-ssd-eu-mount/logs/sqa/sqa_Flow_matching/20250418_140959_jpbciw_kmh-tpuvm-v3-32-11_sqa_NF/checkpoint_775620 # 1024bs, lr8e-4, noise0.15 640ep
+# load_from: /kmh-nfs-us-mount/logs/sqa/sqa_Flow_matching/20250416_212156_3q9y5m_kmh-tpuvm-v2-32-3_sqa_NF/checkpoint_400320 # noise0.2, 256bs, 80ep
+# load_from: /kmh-nfs-ssd-eu-mount/logs/sqa/sqa_Flow_matching/20250424_141722_racmjp_kmh-tpuvm-v3-32-5__b_lr_ep_eval/checkpoint_400320 # noise0.25, bs1024, lr4e-4, 320ep
+# load_from: /kmh-nfs-us-mount/logs/sqa/sqa_Flow_matching/20250427_134856_sptvzr_kmh-tpuvm-v4-32-preemptible-yiyang__b_lr_ep_eval/checkpoint_400320 # Tarflow-L, 256bs, noise0.1, 80ep
+# load_from: /kmh-nfs-ssd-eu-mount/logs/sqa/sqa_Flow_matching/20250430_003532_x8z7mh_kmh-tpuvm-v3-32-12__b_lr_ep_eval/checkpoint_800640 # bs1024, noise0.1, dp0.1, cosine lr, 640ep
+# load_from: /kmh-nfs-us-mount/logs/sqa/sqa_Flow_matching/20250428_141348_6cj5vd_kmh-tpuvm-v4-32-preemptible-yiyang2__b_lr_ep_eval/checkpoint_375300 # bs1024, noise0.1, 320ep
+# load_from: /kmh-nfs-ssd-eu-mount/logs/sqa/sqa_Flow_matching/20250502_133643_xv4xts_kmh-tpuvm-v3-32-5__b_lr_ep_eval/checkpoint_450360 # noise linear decay 0.25->0.1, 1024bs, 640ep, lr4e-4, dp0.1, correspond to noise 0.17
+# load_from: /kmh-nfs-ssd-eu-mount/logs/sqa/sqa_Flow_matching/20250428_151132_906dh9_kmh-tpuvm-v3-32-5__b_lr_ep_eval/checkpoint_187650 # noise 0.25->0.1, 320ep, 1024bs, lr6e-4, correspond to noise 0.18
+# just_evaluate: True # use this to just evaluate the model (without training)
