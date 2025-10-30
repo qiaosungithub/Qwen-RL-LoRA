@@ -11,6 +11,10 @@ def get_config():
     config.model = model = ml_collections.ConfigDict()
     model.name = 'InvalidModel'
 
+    # Dataset
+    config.dataset = dataset = ml_collections.ConfigDict()
+    dataset.max_length = 1024
+
     # Training
     config.training = training = ml_collections.ConfigDict()
     training.optimizer = 'adamw'

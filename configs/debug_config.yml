@@ -1,1 +1,10 @@
-device: cuda
+device: 'cuda:7'
+
+model:
+    name: Qwen/Qwen3-8B
+
+dataset:
+    max_length: 512
+
+training:
+    batch_size: 1 # for debug
