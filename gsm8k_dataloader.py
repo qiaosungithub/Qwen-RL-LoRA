@@ -41,6 +41,7 @@ class GSM8KDataset(Dataset):
                 "input_ids": input_ids["input_ids"].squeeze(0),
                 "attention_mask": input_ids["attention_mask"].squeeze(0),
                 "labels": labels["input_ids"].squeeze(0),
+                'original': item,
             }
         else:
             return {"question": question, "answer": answer}

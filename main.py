@@ -6,14 +6,7 @@ import train
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string("workdir", None, "Directory to store model data.")
-flags.DEFINE_enum(
-    "mode",
-    enum_values=["local_debug", "remote_debug", "remote_run"],
-    default="remote_run",
-    help="Running mode.",
-)  # NOTE: This variable isn't used currently, but maintained for future use. This at least ensures that there is no more variable that must be passed in from the command line.
 
-flags.DEFINE_bool("debug", False, "Debugging mode.")
 config_flags.DEFINE_config_file(
     "config",
     help_string="File path to the training hyperparameter configuration.",
@@ -29,5 +22,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    flags.mark_flags_as_required(["workdir", "mode", "config"])
+    flags.mark_flags_as_required(["workdir", "config"])
     app.run(main)
