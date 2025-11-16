@@ -7,4 +7,5 @@ dataset:
     max_length: 512
 
 training:
-    batch_size: 1 # for debug
+    batch_size: 4 # for debug
+    max_new_tokens: 2000

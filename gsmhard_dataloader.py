@@ -1,20 +1,16 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 from datasets import load_dataset
-from transformers import AutoTokenizer
+import re
 
 class GSMHardDataset(Dataset):
     '''
-    GSM-Hard Dataset for supervised or RL fine-tuning.
-    Fields: input (question), code, target (answer).
+    GSM-Hard Dataset for Supervised or RL fine-tuning.
+    Each item returns: {'input_ids', 'attention_mask', 'answer'} or raw text if no tokenizer.
     '''
-    def __init__(self, 
-                 split='train', 
-                 tokenizer=None, 
-                 max_length=512,
-                 repo_id="reasoning-machines/gsm-hard"):
+    def __init__(self, split='train', tokenizer=None, max_length=512):
         self.dataset = load_dataset(
-            repo_id,
+            'reasoning-machines/gsm-hard',
             split=split,
             cache_dir='/data/scratch-oc40/sqa/data'
         )
@@ -26,46 +22,53 @@ class GSMHardDataset(Dataset):
 
     def __getitem__(self, idx):
         item = self.dataset[idx]
-
-        print(f'Original item keys: {item.keys()}')
-        print(f'Original item: {item}')
-        # Note: GSM-Hard uses 'input' for questions and 'target' for answers
-        question = item['input']
-        answer = item['target']
+        question = item['input']  # GSM-Hard uses 'input' for questions
+        answer = item['target']   # GSM-Hard uses 'target' for answers
 
         if self.tokenizer is not None:
-            prompt = (
-                "Please solve the following math problem. "
-                "Return your final answer marking with ####, for example: #### 42.\n"
-                f"{question}\nAnswer:"
+            prompt = f'Please solve the following problem. Please reason step by step, and put your final answer within \\boxed{{}}.\n{question}\nAnswer:'
+            messages = [{'role': 'user', 'content': prompt}]
+            input_prompt = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=True,
             )
-
-            input_enc = self.tokenizer(
-                prompt,
+            input_ids = self.tokenizer(
+                input_prompt,
                 truncation=True,
                 max_length=self.max_length,
                 padding='max_length',
                 return_tensors='pt',
             )
 
-            # label_enc = self.tokenizer(
-            #     answer,
-            #     truncation=True,
-            #     max_length=self.max_length,
-            #     padding='max_length',
-            #     return_tensors='pt',
-            # )
+            # Extract final answer - GSM-Hard target is already the final numeric answer
+            # But let's handle it consistently with GSM8K
+            final_answer = str(answer).strip()
+            
+            # Turn final_answer into int. Handle comma-separated numbers
+            x = final_answer.replace(',', '')
+            try:
+                final_answer = int(x)
+            except:
+                # Some answers might be floats, try that
+                try:
+                    final_answer = float(x)
+                    final_answer = int(final_answer)  # Convert to int if it's a whole number
+                except:
+                    raise ValueError(f'Cannot convert answer to int: {answer} with {x}')
 
             return {
-                'input_ids': input_enc['input_ids'].squeeze(0),
-                'attention_mask': input_enc['attention_mask'].squeeze(0),
-                # 'labels': label_enc['input_ids'].squeeze(0),
-                'original': item,
-                'target': answer,
+                'input_ids': input_ids['input_ids'].squeeze(0),
+                'attention_mask': input_ids['attention_mask'].squeeze(0),  # for ignoring padding tokens
+                'answer': final_answer,
+                'vis': {
+                    'question': question,
+                    'input_prompt': input_prompt,
+                },
             }
-
         else:
-            return {"question": question, "answer": answer, "code": item.get('code', '')}
+            return {'question': question, 'answer': answer}
 
 
 def create_gsmhard_dataloader(
@@ -74,21 +77,22 @@ def create_gsmhard_dataloader(
     batch_size=4,
     max_length=512,
     shuffle=True,
-    repo_id="reasoning-machines/gsm-hard",
 ):
-    dataset = GSMHardDataset(
-        split=split,
-        tokenizer=tokenizer,
-        max_length=max_length,
-        repo_id=repo_id,
-    )
+    '''
+    Creates a PyTorch DataLoader for GSM-Hard.
+    - If tokenizer=None, returns raw text dataset.
+    - You can plug this into any SFT or RL training loop.
+    '''
+    dataset = GSMHardDataset(split=split, tokenizer=tokenizer, max_length=max_length)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return loader, len(loader)
 
 
 if __name__ == '__main__':
+    from transformers import AutoTokenizer
+    
     tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen2-7B')
-
+    
     loader, steps = create_gsmhard_dataloader(
         tokenizer=tokenizer,
         split='train',
@@ -97,6 +101,7 @@ if __name__ == '__main__':
 
     for batch in loader:
         print({k: v.shape if isinstance(v, torch.Tensor) else type(v) for k, v in batch.items()})
-        print("Input:", tokenizer.decode(batch['input_ids'][0][:120]))
-        print("Label:", tokenizer.decode(batch['labels'][0][:120]))
+        print("Question:", batch['vis']['question'][0])
+        print("Input prompt preview:", batch['vis']['input_prompt'][0][:200])
+        print("Answer:", batch['answer'][0])
         break

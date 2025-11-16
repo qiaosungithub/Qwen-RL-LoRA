@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 from datasets import load_dataset
-from transformers import AutoTokenizer
+import re
 
 class GSM8KDataset(Dataset):
     '''
@@ -22,26 +22,51 @@ class GSM8KDataset(Dataset):
         answer = item['answer'] # the answer with solutions
 
         if self.tokenizer is not None:
-            prompt = f'Please solve the following problem. Please return your final answer marking with four #, for example, #### 400.\n{question}\nAnswer:'
+            prompt = f'Please solve the following problem. Please reason step by step, and put your final answer within \\boxed{{}}.\n{question}\nAnswer:'
+            messages = [{'role': 'user', 'content': prompt}]
+            input_prompt = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=True,
+            )
             input_ids = self.tokenizer(
-                prompt,
+                input_prompt,
                 truncation=True,
                 max_length=self.max_length,
                 padding='max_length',
                 return_tensors='pt',
             )
-            labels = self.tokenizer(
-                answer,
-                truncation=True,
-                max_length=self.max_length,
-                padding='max_length',
-                return_tensors='pt',
-            )
+            # labels = self.tokenizer(
+            #     answer,
+            #     truncation=True,
+            #     max_length=self.max_length,
+            #     padding='max_length',
+            #     return_tensors='pt',
+            # )
+
+            # extract answer. only answer. using regex
+            answer_match = re.search(r'####\s*([^\n\r]+)', answer)
+            if answer_match:
+                final_answer = answer_match.group(1).strip()
+            else:
+                final_answer = answer.strip()
+            
+            # turn final_answer into int. There can be something like 1,234
+            x = final_answer.replace(',', '')
+            try:
+                final_answer = int(x)
+            except:
+                raise ValueError(f'Cannot convert answer to int: {final_answer} with {x}')
+
             return {
                 'input_ids': input_ids['input_ids'].squeeze(0),
                 'attention_mask': input_ids['attention_mask'].squeeze(0), # for ignoring padding tokens
-                'labels': labels['input_ids'].squeeze(0),
-                'original': item,
+                'answer': final_answer,
+                'vis': {
+                    'question': question,
+                    'input_prompt': input_prompt,
+                },
             }
         else:
             return {'question': question, 'answer': answer}
