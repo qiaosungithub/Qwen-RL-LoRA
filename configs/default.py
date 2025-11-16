@@ -15,6 +15,25 @@ def get_config():
     config.dataset = dataset = ml_collections.ConfigDict()
     dataset.max_length = 1024
 
+    # lora
+    config.lora = lora = ml_collections.ConfigDict()
+    lora.rank = 8
+
+    # generation
+    config.generation = generation = ml_collections.ConfigDict()
+    generation.temperature = 0.6
+    generation.top_p = 0.95
+    generation.top_k = 20
+    generation.do_sample = True
+    generation.max_new_tokens = 2048
+
+    # ppo
+    config.ppo = ppo = ml_collections.ConfigDict()
+    ppo.clip_epsilon = 0.2
+    ppo.kl_coef = 0.1
+    ppo.reward_correct = 0.5
+    ppo.reward_wrong = -0.5
+
     # Training
     config.training = training = ml_collections.ConfigDict()
     training.optimizer = 'adamw'
