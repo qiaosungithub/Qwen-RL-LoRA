@@ -4,6 +4,8 @@ from peft import get_peft_model, LoraConfig
 import torch, torch.nn.functional as F
 
 from gsm8k_dataloader import create_gsm8k_dataloader
+from svamp_dataloader import create_svamp_dataloader
+from gsmhard_dataloader import create_gsmhard_dataloader
 
 def train_and_evaluate(config, workdir):
     # 设定训练设备
@@ -22,6 +24,7 @@ def train_and_evaluate(config, workdir):
     model = get_peft_model(model, lora_cfg) # wrap with LoRA
     # model.to(device)
     tokenizer = AutoTokenizer.from_pretrained(config.model.name, trust_remote_code=True, cache_dir='/data/scratch-oc40/sqa/cache')
+    tokenizer.padding_side = "right"  # during training, right padding is needed
 
     # 2. 冻结除了 LoRA 层
     for n, p in model.named_parameters():
@@ -31,7 +34,8 @@ def train_and_evaluate(config, workdir):
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
 
     ############## create dataset ##############
-    train_loader, train_steps = create_gsm8k_dataloader(
+    # train_loader, train_steps = create_gsm8k_dataloader(
+    train_loader, train_steps = create_gsmhard_dataloader(
         tokenizer=tokenizer,
         split='train',
         batch_size=config.training.batch_size,
