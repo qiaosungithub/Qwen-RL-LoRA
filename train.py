@@ -4,7 +4,7 @@ from peft import get_peft_model, LoraConfig
 import torch
 import torch.nn.functional as F
 import re
-import os
+import os, wandb
 from datetime import datetime
 
 from gsm8k_dataloader import create_gsm8k_dataloader
@@ -145,6 +145,11 @@ def train_and_evaluate(config, workdir):
     torch.manual_seed(config.training.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(config.training.seed)
+    
+    # init wandb
+    wandb.init(project="qwen-ppo-lora", dir=workdir, tags=['try'])
+    wandb.config.update(config.to_dict())
+    wandb.run.notes = config.wandb_notes
 
     # ============ 1. 加载 Policy Model ============
     print("Loading policy model...")
@@ -153,7 +158,7 @@ def train_and_evaluate(config, workdir):
         device_map={'': device},
         dtype=torch.bfloat16,
         trust_remote_code=True,
-        cache_dir='/data/scratch-oc40/sqa/cache',
+        cache_dir=config.cache_dir,
         attn_implementation="flash_attention_2",  # Flash Attention 2 加速
         use_cache=True,  # KV cache
     )
@@ -165,7 +170,7 @@ def train_and_evaluate(config, workdir):
         device_map={'': device},
         dtype=torch.bfloat16,
         trust_remote_code=True,
-        cache_dir='/data/scratch-oc40/sqa/cache',
+        cache_dir=config.cache_dir,
         attn_implementation="flash_attention_2",
         use_cache=False,
     )
@@ -179,7 +184,7 @@ def train_and_evaluate(config, workdir):
     tokenizer = AutoTokenizer.from_pretrained(
         config.model.name,
         trust_remote_code=True,
-        cache_dir='/data/scratch-oc40/sqa/cache'
+        cache_dir=config.cache_dir
     )
     
     # 统一使用 left padding（适用于生成和训练）
@@ -430,6 +435,17 @@ def train_and_evaluate(config, workdir):
                       f"KL: {kl_div.item():.4f} | "
                       f"Acc: {batch_accuracy:.2%} | "
                       f"Reward: {avg_reward:.3f}")
+                
+                # Log to wandb
+                wandb.log({
+                    'loss': loss.item(),
+                    'policy_loss': policy_loss.item(),
+                    'kl_div': kl_div.item(),
+                    'accuracy': batch_accuracy,
+                    'reward': avg_reward,
+                    'epoch': epoch + 1,
+                    'step': global_step,
+                })
             
             # 限制每个epoch的最大步数
             if batch_idx >= config.training.max_steps_per_epoch - 1:
@@ -457,19 +473,21 @@ def train_and_evaluate(config, workdir):
             tokenizer.save_pretrained(save_dir)
             print(f"✓ Saved checkpoint to {save_dir}\n")
         
-        # 保存最佳模型
-        if epoch_accuracy > best_accuracy:
-            best_accuracy = epoch_accuracy
-            best_dir = os.path.join(workdir, "best_model")
-            os.makedirs(best_dir, exist_ok=True)
-            model.save_pretrained(best_dir)
-            tokenizer.save_pretrained(best_dir)
-            print(f"✓ Saved best model (accuracy: {best_accuracy:.2%}) to {best_dir}\n")
+        # # 保存最佳模型
+        # if epoch_accuracy > best_accuracy:
+        #     best_accuracy = epoch_accuracy
+        #     best_dir = os.path.join(workdir, "best_model")
+        #     os.makedirs(best_dir, exist_ok=True)
+        #     model.save_pretrained(best_dir)
+        #     tokenizer.save_pretrained(best_dir)
+        #     print(f"✓ Saved best model (accuracy: {best_accuracy:.2%}) to {best_dir}\n")
 
     print(f"\n{'='*60}")
     print("Training Completed!")
     print(f"Best Accuracy: {best_accuracy:.2%}")
     print(f"{'='*60}\n")
+
+    wandb.finish()
     
     return model, tokenizer
 

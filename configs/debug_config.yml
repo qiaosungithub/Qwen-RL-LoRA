@@ -1,4 +1,6 @@
 device: 'cuda'
+cache_dir: '/data/scratch-oc40/sqa/cache'
+wandb_notes: 'first try'
 
 model:
     name: Qwen/Qwen3-8B
