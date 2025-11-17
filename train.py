@@ -11,6 +11,7 @@ from gsm8k_dataloader import create_gsm8k_dataloader
 from svamp_dataloader import create_svamp_dataloader
 from gsmhard_dataloader import create_gsmhard_dataloader
 
+from utils.qwen_util import enable_kv_cache, disable_kv_cache
 
 def parse_answer(response):
     """从response中提取答案"""
@@ -154,7 +155,7 @@ def train_and_evaluate(config, workdir):
         trust_remote_code=True,
         cache_dir='/data/scratch-oc40/sqa/cache',
         attn_implementation="flash_attention_2",  # Flash Attention 2 加速
-        use_cache=False,  # 训练时禁用KV cache
+        use_cache=True,  # KV cache
     )
 
     # ============ 2. 加载 Reference Model（冻结） ============
@@ -302,6 +303,7 @@ def train_and_evaluate(config, workdir):
 
             # ============ Step 2: 生成 responses ============
             model.eval()
+            enable_kv_cache(model)
             with torch.no_grad():
                 output = model.generate(
                     input_ids=input_ids,
@@ -332,7 +334,6 @@ def train_and_evaluate(config, workdir):
             )  # [batch_size, response_length]
             
             # ============ Step 4: 构建完整序列（prompt + response） ============
-            # 拼接 prompt 和 response
             full_input_ids = torch.cat([input_ids, responses], dim=1)
             full_attention_mask = torch.cat([
                 attention_mask,
@@ -344,6 +345,7 @@ def train_and_evaluate(config, workdir):
             
             # ============ Step 5: 获取 old log probs（用于PPO ratio） ============
             model.eval()
+            disable_kv_cache(model)
             with torch.no_grad():
                 old_log_probs = get_log_probs(
                     model, 
@@ -362,7 +364,7 @@ def train_and_evaluate(config, workdir):
 
             # ============ Step 6: PPO 更新 ============
             model.train()
-            
+            disable_kv_cache(model)
             # 前向传播获取新的 log probs
             new_log_probs = get_log_probs(
                 model,
@@ -406,9 +408,7 @@ def train_and_evaluate(config, workdir):
             optimizer.zero_grad()
             loss.backward()
             
-            # 梯度裁剪
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.training.max_grad_norm)
-            
             optimizer.step()
             
             # ============ Step 8: 记录统计信息 ============
