@@ -220,11 +220,10 @@ def train_and_evaluate(config, workdir):
             if 'lora' in name.lower():
                 lora_params.append(param)
             else:
-                other_params.append(param)
+                param.requires_grad = False
     
     optimizer = torch.optim.AdamW([
         {'params': lora_params, 'weight_decay': 0.0},
-        {'params': other_params, 'weight_decay': 0.0},
     ], lr=config.training.learning_rate)
     
     print(f"Optimizer: AdamW with lr={config.training.learning_rate}")
