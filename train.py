@@ -11,7 +11,7 @@ from gsm8k_dataloader import create_gsm8k_dataloader
 from svamp_dataloader import create_svamp_dataloader
 from gsmhard_dataloader import create_gsmhard_dataloader
 
-from utils.qwen_util import enable_kv_cache, disable_kv_cache
+from utils.qwen_util import enable_kv_cache, disable_kv_cache, generate_multiple_times, model_forward_multiple_times
 
 def parse_answer(response):
     """从response中提取答案"""
@@ -74,7 +74,7 @@ def compute_rewards(responses, ground_truth_answers, tokenizer, reward_correct=1
     return torch.stack(padded_rewards)  # [batch_size, max_response_length]
 
 
-def get_log_probs(model, input_ids, attention_mask, response_start_indices):
+def get_log_probs(model, input_ids, attention_mask, response_start_indices, forward_bs=None):
     """
     计算responses的log probabilities
     Args:
@@ -85,10 +85,7 @@ def get_log_probs(model, input_ids, attention_mask, response_start_indices):
     Returns:
         log_probs: [batch_size, max_response_len] response部分的log probs
     """
-    outputs = model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-    )
+    outputs = model_forward_multiple_times(model, forward_bs, input_ids, attention_mask)  # [batch_size, seq_len, vocab_size]
     logits = outputs.logits  # [batch_size, seq_len, vocab_size]
     
     batch_size = input_ids.shape[0]
@@ -313,12 +310,13 @@ def train_and_evaluate(config, workdir):
             # 生成 responses
             model.eval()
             enable_kv_cache(model)
-            with torch.no_grad():
-                output = model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    **generate_kwargs,
-                )
+            output = generate_multiple_times(
+                model,
+                generate_bs=config.generate_bs,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                generate_kwargs=generate_kwargs
+            )
             
             # 提取生成的部分
             responses = output[:, input_ids.size(1):]  # [rollout_batch_size, response_length]
@@ -360,7 +358,8 @@ def train_and_evaluate(config, workdir):
                     model, 
                     full_input_ids, 
                     full_attention_mask, 
-                    response_start_indices
+                    response_start_indices,
+                    foward_bs=config.generate_bs
                 )  # [rollout_batch_size, max_response_len]
                 
                 # 同时获取 reference model 的 log probs（用于KL惩罚）
@@ -368,7 +367,8 @@ def train_and_evaluate(config, workdir):
                     ref_model,
                     full_input_ids,
                     full_attention_mask,
-                    response_start_indices
+                    response_start_indices,
+                    forward_bs=config.generate_bs
                 )  # [rollout_batch_size, max_response_len]
             
             # 创建response mask
@@ -418,7 +418,8 @@ def train_and_evaluate(config, workdir):
                     model,
                     train_input_ids,
                     train_attention_mask,
-                    train_response_start_indices
+                    train_response_start_indices,
+                    forward_bs=None,
                 )  # [train_batch_size, max_response_len]
                 
                 # 计算 PPO loss

@@ -1,6 +1,7 @@
 device: 'cuda:7'
 cache_dir: '/data/scratch-oc40/sqa/cache'
 wandb_notes: 'first try'
+generate_bs: 32 # adjust this based on your GPU memory
 
 model:
     name: Qwen/Qwen3-8B
