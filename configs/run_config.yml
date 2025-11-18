@@ -1,4 +1,4 @@
-device: 'cuda'
+device: 'cuda:7'
 cache_dir: '/data/scratch-oc40/sqa/cache'
 wandb_notes: 'first try'
 
@@ -15,7 +15,9 @@ lora:
     dropout: 0.05
 
 training:
-    batch_size: 4 # for debug
+    batch_size: 256
+    train_batch_size: 32
+    rounds_per_batch: 3
     num_epochs: 10
     max_new_tokens: 2000
     learning_rate: 0.0001

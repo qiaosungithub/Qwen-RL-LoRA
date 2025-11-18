@@ -8,11 +8,11 @@ class GSMHardDataset(Dataset):
     GSM-Hard Dataset for Supervised or RL fine-tuning.
     Each item returns: {'input_ids', 'attention_mask', 'answer'} or raw text if no tokenizer.
     '''
-    def __init__(self, split='train', tokenizer=None, max_length=512):
+    def __init__(self, split='train', tokenizer=None, max_length=512, cache_dir=None):
         self.dataset = load_dataset(
             'reasoning-machines/gsm-hard',
             split=split,
-            cache_dir='/data/scratch-oc40/sqa/data'
+            cache_dir=cache_dir,
         )
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -77,13 +77,14 @@ def create_gsmhard_dataloader(
     batch_size=4,
     max_length=512,
     shuffle=True,
+    cache_dir=None,
 ):
     '''
     Creates a PyTorch DataLoader for GSM-Hard.
     - If tokenizer=None, returns raw text dataset.
     - You can plug this into any SFT or RL training loop.
     '''
-    dataset = GSMHardDataset(split=split, tokenizer=tokenizer, max_length=max_length)
+    dataset = GSMHardDataset(split=split, tokenizer=tokenizer, max_length=max_length, cache_dir=cache_dir)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return loader, len(loader)
 

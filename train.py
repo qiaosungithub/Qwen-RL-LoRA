@@ -52,14 +52,13 @@ def compute_rewards(responses, ground_truth_answers, tokenizer, reward_correct=1
         predicted_answer = parse_answer(response_text)
         ground_truth = int(ground_truth_answers[i])
         
-        # 只在最后一个token给reward，其他位置为0
+        # 给所有token相同的reward（整个推理链条对最终答案负责）
         response_length = responses[i].shape[0]
-        token_rewards = torch.zeros(response_length, device=responses[i].device)
         
         if predicted_answer is not None and predicted_answer == ground_truth:
-            token_rewards[-1] = reward_correct  # 正确答案
+            token_rewards = torch.full((response_length,), reward_correct, device=responses[i].device)
         else:
-            token_rewards[-1] = reward_wrong    # 错误答案
+            token_rewards = torch.full((response_length,), reward_wrong, device=responses[i].device)
         
         rewards.append(token_rewards)
     
@@ -213,7 +212,6 @@ def train_and_evaluate(config, workdir):
     # ============ 5. 优化器（LoRA参数不使用weight decay） ============
     # 分离参数：LoRA参数 vs 其他参数
     lora_params = []
-    other_params = []
     
     for name, param in model.named_parameters():
         if param.requires_grad:
@@ -228,15 +226,15 @@ def train_and_evaluate(config, workdir):
     
     print(f"Optimizer: AdamW with lr={config.training.learning_rate}")
     print(f"  - LoRA params: {len(lora_params)} tensors")
-    print(f"  - Other params: {len(other_params)} tensors")
 
     # ============ 6. 创建 DataLoader ============
     print(f"\nLoading dataset: {config.dataset.name}")
+    # 使用 rollout_batch_size 作为 dataloader 的 batch_size
     if config.dataset.name == 'gsm8k':
         train_loader, train_steps = create_gsm8k_dataloader(
             tokenizer=tokenizer,
             split='train',
-            batch_size=config.training.batch_size,
+            batch_size=config.training.batch_size,  # 256
             max_length=config.dataset.max_length,
             shuffle=True,
         )
@@ -244,7 +242,7 @@ def train_and_evaluate(config, workdir):
         train_loader, train_steps = create_gsmhard_dataloader(
             tokenizer=tokenizer,
             split='train',
-            batch_size=config.training.batch_size,
+            batch_size=config.training.batch_size,  # 256
             max_length=config.dataset.max_length,
             shuffle=True,
         )
@@ -252,7 +250,7 @@ def train_and_evaluate(config, workdir):
         train_loader, train_steps = create_svamp_dataloader(
             tokenizer=tokenizer,
             split='train',
-            batch_size=config.training.batch_size,
+            batch_size=config.training.batch_size,  # 256
             max_length=config.dataset.max_length,
             shuffle=True,
         )
@@ -274,8 +272,13 @@ def train_and_evaluate(config, workdir):
     # ============ 8. PPO 超参数 ============
     clip_epsilon = config.ppo.clip_epsilon
     kl_coef = config.ppo.kl_coef
+    train_batch_size = config.training.train_batch_size  # 32
+    rounds_per_batch = config.training.rounds_per_batch  # 3
     
     print(f"\nPPO Hyperparameters:")
+    print(f"  - Rollout batch size: {config.training.batch_size}")
+    print(f"  - Train batch size: {train_batch_size}")
+    print(f"  - Rounds per batch: {rounds_per_batch}")
     print(f"  - Clip epsilon: {clip_epsilon}")
     print(f"  - KL coefficient: {kl_coef}")
 
@@ -294,18 +297,20 @@ def train_and_evaluate(config, workdir):
         epoch_kl = 0.0
         epoch_correct = 0
         epoch_total = 0
-        epoch_steps = 0
+        epoch_updates = 0  # 记录更新次数
 
         for batch_idx, batch in enumerate(train_loader):
-            # ============ Step 1: 准备输入 ============
+            # ============ Phase 1: Rollout (生成256道题的回答) ============
+            print(f"\n[Rollout] Processing batch {batch_idx+1}")
+            
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             ground_truth = batch['answer']
             
-            batch_size = input_ids.shape[0]
+            rollout_batch_size = input_ids.shape[0]
             prompt_lengths = attention_mask.sum(dim=1)  # 每个样本的prompt长度
 
-            # ============ Step 2: 生成 responses ============
+            # 生成 responses
             model.eval()
             enable_kv_cache(model)
             with torch.no_grad():
@@ -316,9 +321,9 @@ def train_and_evaluate(config, workdir):
                 )
             
             # 提取生成的部分
-            responses = output[:, input_ids.size(1):]  # [batch_size, response_length]
+            responses = output[:, input_ids.size(1):]  # [rollout_batch_size, response_length]
             
-            # ============ Step 3: 评估生成质量 & 计算 rewards ============
+            # 评估生成质量 & 计算 rewards
             decoded_responses = tokenizer.batch_decode(responses, skip_special_tokens=True)
             batch_correct = 0
             
@@ -335,9 +340,9 @@ def train_and_evaluate(config, workdir):
                 tokenizer,
                 reward_correct=config.ppo.reward_correct,
                 reward_wrong=config.ppo.reward_wrong
-            )  # [batch_size, response_length]
+            )  # [rollout_batch_size, response_length]
             
-            # ============ Step 4: 构建完整序列（prompt + response） ============
+            # 构建完整序列（prompt + response）
             full_input_ids = torch.cat([input_ids, responses], dim=1)
             full_attention_mask = torch.cat([
                 attention_mask,
@@ -347,7 +352,7 @@ def train_and_evaluate(config, workdir):
             # 记录每个样本response开始的位置
             response_start_indices = prompt_lengths.tolist()
             
-            # ============ Step 5: 获取 old log probs（用于PPO ratio） ============
+            # 获取 old log probs（rollout时的log probs）
             model.eval()
             disable_kv_cache(model)
             with torch.no_grad():
@@ -356,7 +361,7 @@ def train_and_evaluate(config, workdir):
                     full_input_ids, 
                     full_attention_mask, 
                     response_start_indices
-                )  # [batch_size, max_response_len]
+                )  # [rollout_batch_size, max_response_len]
                 
                 # 同时获取 reference model 的 log probs（用于KL惩罚）
                 ref_log_probs = get_log_probs(
@@ -364,86 +369,108 @@ def train_and_evaluate(config, workdir):
                     full_input_ids,
                     full_attention_mask,
                     response_start_indices
-                )  # [batch_size, max_response_len]
-
-            # ============ Step 6: PPO 更新 ============
-            model.train()
-            disable_kv_cache(model)
-            # 前向传播获取新的 log probs
-            new_log_probs = get_log_probs(
-                model,
-                full_input_ids,
-                full_attention_mask,
-                response_start_indices
-            )  # [batch_size, max_response_len]
+                )  # [rollout_batch_size, max_response_len]
             
-            # 创建mask：只对非padding的response tokens计算loss
+            # 创建response mask
             response_mask = torch.zeros_like(rewards, dtype=torch.bool)
-            for i in range(batch_size):
+            for i in range(rollout_batch_size):
                 start_idx = response_start_indices[i]
                 end_idx = full_attention_mask[i].sum().item()
                 response_len = end_idx - start_idx
                 response_mask[i, :response_len] = True
             
-            # 计算 PPO loss
-            # 1. Policy ratio
-            ratio = torch.exp(new_log_probs - old_log_probs)  # [batch_size, response_len]
+            # 统计rollout信息
+            rollout_accuracy = batch_correct / rollout_batch_size
+            # 现在每个有效token都有相同的reward，直接计算平均即可
+            avg_reward = (rewards * response_mask).sum().item() / response_mask.sum().item()
             
-            # 2. Clipped ratio
-            clipped_ratio = torch.clamp(ratio, 1.0 - clip_epsilon, 1.0 + clip_epsilon)
+            print(f"[Rollout] Generated {rollout_batch_size} responses | "
+                  f"Accuracy: {rollout_accuracy:.2%} | "
+                  f"Avg Reward: {avg_reward:.3f} | "
+                  f"Correct: {batch_correct}, Wrong: {rollout_batch_size - batch_correct}")
             
-            # 3. PPO objective (只在有效token上计算)
-            policy_objective = torch.min(
-                ratio * rewards,
-                clipped_ratio * rewards
-            )
-            policy_objective = (policy_objective * response_mask).sum() / response_mask.sum()
-            policy_loss = -policy_objective  # 最大化objective = 最小化负objective
+            # ============ Phase 2: 多轮PPO更新 (对256题过3轮，每次32题) ============
+            # 计算总共需要的更新步数：256 * 3 / 32 = 24步
+            total_updates = (rollout_batch_size * rounds_per_batch) // train_batch_size
             
-            # 4. KL divergence penalty
-            kl_div = (new_log_probs - ref_log_probs)
-            kl_div = (kl_div * response_mask).sum() / response_mask.sum()
-            kl_penalty = kl_coef * kl_div
-            
-            # 5. Total loss
-            loss = policy_loss + kl_penalty
-            
-            # ============ Step 7: 反向传播 ============
-            optimizer.zero_grad()
-            loss.backward()
-            
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.training.max_grad_norm)
-            optimizer.step()
-            
-            # ============ Step 8: 记录统计信息 ============
-            epoch_loss += loss.item()
-            epoch_policy_loss += policy_loss.item()
-            epoch_kl += kl_div.item()
-            epoch_steps += 1
-            global_step += 1
-            
-            # 定期打印日志
-            if batch_idx % config.training.log_interval == 0:
-                batch_accuracy = batch_correct / batch_size
-                avg_reward = rewards.sum().item() / response_mask.sum().item()
+            for update_idx in range(total_updates):
+                round_num = update_idx // (rollout_batch_size // train_batch_size) + 1
+                step_in_round = update_idx % (rollout_batch_size // train_batch_size) + 1
                 
-                print(f"Epoch {epoch+1}/{config.training.num_epochs} | "
-                      f"Step {batch_idx}/{min(train_steps, config.training.max_steps_per_epoch)} | "
-                      f"Loss: {loss.item():.4f} | "
+                print(f"  [Update {update_idx+1}/{total_updates}] Round {round_num}/{rounds_per_batch}, Step {step_in_round}")
+                
+                # 随机采样train_batch_size个样本
+                indices = torch.randperm(rollout_batch_size)[:train_batch_size]
+                
+                # 提取子batch
+                train_input_ids = full_input_ids[indices]
+                train_attention_mask = full_attention_mask[indices]
+                train_old_log_probs = old_log_probs[indices]
+                train_ref_log_probs = ref_log_probs[indices]
+                train_rewards = rewards[indices]
+                train_response_mask = response_mask[indices]
+                train_response_start_indices = [response_start_indices[i] for i in indices]
+                
+                # 前向传播获取新的 log probs
+                model.train()
+                disable_kv_cache(model)
+                new_log_probs = get_log_probs(
+                    model,
+                    train_input_ids,
+                    train_attention_mask,
+                    train_response_start_indices
+                )  # [train_batch_size, max_response_len]
+                
+                # 计算 PPO loss
+                # 1. Policy ratio
+                ratio = torch.exp(new_log_probs - train_old_log_probs)
+                
+                # 2. Clipped ratio
+                clipped_ratio = torch.clamp(ratio, 1.0 - clip_epsilon, 1.0 + clip_epsilon)
+                
+                # 3. PPO objective (只在有效token上计算)
+                policy_objective = torch.min(
+                    ratio * train_rewards,
+                    clipped_ratio * train_rewards
+                )
+                policy_objective = (policy_objective * train_response_mask).sum() / train_response_mask.sum()
+                policy_loss = -policy_objective
+                
+                # 4. KL divergence penalty
+                kl_div = (new_log_probs - train_ref_log_probs)
+                kl_div = (kl_div * train_response_mask).sum() / train_response_mask.sum()
+                kl_penalty = kl_coef * kl_div
+                
+                # 5. Total loss
+                loss = policy_loss + kl_penalty
+                
+                # 反向传播
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.training.max_grad_norm)
+                optimizer.step()
+                
+                # 记录统计信息
+                epoch_loss += loss.item()
+                epoch_policy_loss += policy_loss.item()
+                epoch_kl += kl_div.item()
+                epoch_updates += 1
+                global_step += 1
+                
+                print(f"    Loss: {loss.item():.4f} | "
                       f"Policy: {policy_loss.item():.4f} | "
-                      f"KL: {kl_div.item():.4f} | "
-                      f"Acc: {batch_accuracy:.2%} | "
-                      f"Reward: {avg_reward:.3f}")
+                      f"KL: {kl_div.item():.4f}")
                 
                 # Log to wandb
                 wandb.log({
                     'loss': loss.item(),
                     'policy_loss': policy_loss.item(),
                     'kl_div': kl_div.item(),
-                    'accuracy': batch_accuracy,
-                    'reward': avg_reward,
+                    'rollout_accuracy': rollout_accuracy,
+                    'avg_reward': avg_reward,
                     'epoch': epoch + 1,
                     'step': global_step,
+                    'round': round_num,
                 })
             
             # 限制每个epoch的最大步数
@@ -451,13 +478,14 @@ def train_and_evaluate(config, workdir):
                 break
         
         # ============ Epoch 总结 ============
-        avg_loss = epoch_loss / epoch_steps
-        avg_policy_loss = epoch_policy_loss / epoch_steps
-        avg_kl = epoch_kl / epoch_steps
+        avg_loss = epoch_loss / epoch_updates if epoch_updates > 0 else 0
+        avg_policy_loss = epoch_policy_loss / epoch_updates if epoch_updates > 0 else 0
+        avg_kl = epoch_kl / epoch_updates if epoch_updates > 0 else 0
         epoch_accuracy = epoch_correct / epoch_total if epoch_total > 0 else 0
         
         print(f"\n{'='*60}")
         print(f"Epoch {epoch+1}/{config.training.num_epochs} Summary:")
+        print(f"  Total Updates: {epoch_updates}")
         print(f"  Average Loss: {avg_loss:.4f}")
         print(f"  Policy Loss: {avg_policy_loss:.4f}")
         print(f"  KL Divergence: {avg_kl:.4f}")
@@ -472,14 +500,14 @@ def train_and_evaluate(config, workdir):
             tokenizer.save_pretrained(save_dir)
             print(f"✓ Saved checkpoint to {save_dir}\n")
         
-        # # 保存最佳模型
-        # if epoch_accuracy > best_accuracy:
-        #     best_accuracy = epoch_accuracy
-        #     best_dir = os.path.join(workdir, "best_model")
-        #     os.makedirs(best_dir, exist_ok=True)
-        #     model.save_pretrained(best_dir)
-        #     tokenizer.save_pretrained(best_dir)
-        #     print(f"✓ Saved best model (accuracy: {best_accuracy:.2%}) to {best_dir}\n")
+        # 保存最佳模型
+        if epoch_accuracy > best_accuracy:
+            best_accuracy = epoch_accuracy
+            best_dir = os.path.join(workdir, "best_model")
+            os.makedirs(best_dir, exist_ok=True)
+            model.save_pretrained(best_dir)
+            tokenizer.save_pretrained(best_dir)
+            print(f"✓ Saved best model (accuracy: {best_accuracy:.2%}) to {best_dir}\n")
 
     print(f"\n{'='*60}")
     print("Training Completed!")
@@ -489,61 +517,3 @@ def train_and_evaluate(config, workdir):
     wandb.finish()
     
     return model, tokenizer
-
-
-# # ============ 配置类 ============
-# class Config:
-#     device = "cuda:0"
-    
-#     class model:
-#         name = "Qwen/Qwen2-7B"
-    
-#     class lora:
-#         rank = 8
-#         alpha = 32
-#         dropout = 0.05
-    
-#     class training:
-#         seed = 42
-#         batch_size = 4
-#         num_epochs = 3
-#         learning_rate = 1e-4
-#         max_grad_norm = 1.0
-#         max_steps_per_epoch = 500  # 限制每个epoch的步数
-#         save_every = 1  # 每几个epoch保存一次
-#         log_interval = 10  # 每几步打印一次
-    
-#     class dataset:
-#         name = "gsmhard"  # 'gsm8k', 'gsmhard', 'svamp'
-#         max_length = 512
-    
-#     class generation:
-#         temperature = 0.6
-#         top_p = 0.95
-#         top_k = 20
-#         do_sample = True
-#         max_new_tokens = 2048
-    
-#     class ppo:
-#         clip_epsilon = 0.2
-#         kl_coef = 0.1
-#         reward_correct = 1.0
-#         reward_wrong = -0.5
-
-
-# # ============ 主函数 ============
-# if __name__ == '__main__':
-#     # 创建工作目录
-#     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-#     workdir = f"./outputs/ppo_training_{timestamp}"
-#     os.makedirs(workdir, exist_ok=True)
-    
-#     print(f"Working directory: {workdir}")
-    
-#     # 初始化配置
-#     config = Config()
-    
-#     # 开始训练
-#     model, tokenizer = train_and_evaluate(config, workdir)
-    
-#     print("All done!")
