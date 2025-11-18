@@ -359,7 +359,7 @@ def train_and_evaluate(config, workdir):
                     full_input_ids, 
                     full_attention_mask, 
                     response_start_indices,
-                    foward_bs=config.generate_bs
+                    forward_bs=config.generate_bs
                 )  # [rollout_batch_size, max_response_len]
                 
                 # 同时获取 reference model 的 log probs（用于KL惩罚）
