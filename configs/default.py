@@ -25,7 +25,7 @@ def get_config():
     generation.top_p = 0.95
     generation.top_k = 20
     generation.do_sample = True
-    generation.max_new_tokens = 2048
+    generation.max_new_tokens = 1024
 
     # ppo
     config.ppo = ppo = ml_collections.ConfigDict()

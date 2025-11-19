@@ -1,4 +1,4 @@
-device: 'cuda:7'
+device: 'cuda:0'
 cache_dir: '/data/scratch-oc40/sqa/cache'
 wandb_notes: 'first try'
 generate_bs: 4 # adjust this based on your GPU memory
@@ -26,6 +26,7 @@ training:
     max_steps_per_epoch: 500
     save_every: 1
     log_interval: 10
+    vllm_update_freq: 5
 
 ppo:
-    kl_coeff: 0.01
+    kl_coef: 0.01

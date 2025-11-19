@@ -3,76 +3,15 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig
 import torch
 import torch.nn.functional as F
-import re
 import os, wandb
-from datetime import datetime
 
 from gsm8k_dataloader import create_gsm8k_dataloader
 from svamp_dataloader import create_svamp_dataloader
 from gsmhard_dataloader import create_gsmhard_dataloader
 
 from utils.qwen_util import enable_kv_cache, disable_kv_cache, generate_multiple_times, model_forward_multiple_times
-
-def parse_answer(response):
-    """从response中提取答案"""
-    answer_match = re.search(r'\\boxed{([^}]*)}', response)
-    if answer_match:
-        final_answer = answer_match.group(1).strip()
-    else:
-        final_answer = None
-    
-    try:
-        # 处理逗号分隔的数字
-        if final_answer:
-            final_answer = final_answer.replace(',', '')
-        final_answer = int(final_answer)
-    except (ValueError, TypeError):
-        final_answer = None
-    
-    return final_answer
-
-
-def compute_rewards(responses, ground_truth_answers, tokenizer, reward_correct=1.0, reward_wrong=-0.5):
-    """
-    计算每个response的reward
-    Args:
-        responses: [batch_size, response_length] 生成的token ids
-        ground_truth_answers: list of int，正确答案
-        tokenizer: tokenizer
-        reward_correct: 正确答案的奖励
-        reward_wrong: 错误答案的惩罚
-    Returns:
-        rewards: [batch_size, response_length] 每个token位置的reward
-    """
-    batch_size = len(responses)
-    rewards = []
-    
-    for i in range(batch_size):
-        response_text = tokenizer.decode(responses[i], skip_special_tokens=True)
-        predicted_answer = parse_answer(response_text)
-        ground_truth = int(ground_truth_answers[i])
-        
-        # 给所有token相同的reward（整个推理链条对最终答案负责）
-        response_length = responses[i].shape[0]
-        
-        if predicted_answer is not None and predicted_answer == ground_truth:
-            token_rewards = torch.full((response_length,), reward_correct, device=responses[i].device)
-        else:
-            token_rewards = torch.full((response_length,), reward_wrong, device=responses[i].device)
-        
-        rewards.append(token_rewards)
-    
-    # Pad to same length
-    max_len = max(r.shape[0] for r in rewards)
-    padded_rewards = []
-    for r in rewards:
-        if r.shape[0] < max_len:
-            padding = torch.zeros(max_len - r.shape[0], device=r.device)
-            r = torch.cat([r, padding])
-        padded_rewards.append(r)
-    
-    return torch.stack(padded_rewards)  # [batch_size, max_response_length]
-
+from utils.reward_util import parse_answer, compute_rewards
+from utils.vllm_util import vLLMGenerator, merge_lora_for_vllm
 
 def get_log_probs(model, input_ids, attention_mask, response_start_indices, forward_bs=None):
     """
@@ -85,8 +24,7 @@ def get_log_probs(model, input_ids, attention_mask, response_start_indices, forw
     Returns:
         log_probs: [batch_size, max_response_len] response部分的log probs
     """
-    outputs = model_forward_multiple_times(model, forward_bs, input_ids, attention_mask)  # [batch_size, seq_len, vocab_size]
-    logits = outputs.logits  # [batch_size, seq_len, vocab_size]
+    logits = model_forward_multiple_times(model, forward_bs, input_ids, attention_mask)  # [batch_size, seq_len, vocab_size]
     
     batch_size = input_ids.shape[0]
     log_probs_list = []
@@ -155,7 +93,7 @@ def train_and_evaluate(config, workdir):
         dtype=torch.bfloat16,
         trust_remote_code=True,
         cache_dir=config.cache_dir,
-        attn_implementation="flash_attention_2",  # Flash Attention 2 加速
+        attn_implementation="sdpa",  # Flash Attention 2 加速
         use_cache=True,  # KV cache
     )
 
@@ -167,7 +105,7 @@ def train_and_evaluate(config, workdir):
         dtype=torch.bfloat16,
         trust_remote_code=True,
         cache_dir=config.cache_dir,
-        attn_implementation="flash_attention_2",
+        attn_implementation="sdpa",
         use_cache=False,
     )
     
@@ -256,17 +194,7 @@ def train_and_evaluate(config, workdir):
     
     print(f'Train steps per epoch: {train_steps}')
 
-    # ============ 7. 生成参数 ============
-    generate_kwargs = dict(
-        temperature=config.generation.temperature,
-        top_p=config.generation.top_p,
-        top_k=config.generation.top_k,
-        do_sample=config.generation.do_sample,
-        max_new_tokens=config.generation.max_new_tokens,
-        pad_token_id=tokenizer.pad_token_id,
-    )
-
-    # ============ 8. PPO 超参数 ============
+    # ============ 7. PPO 超参数 ============
     clip_epsilon = config.ppo.clip_epsilon
     kl_coef = config.ppo.kl_coef
     train_batch_size = config.training.train_batch_size  # 32
@@ -278,6 +206,23 @@ def train_and_evaluate(config, workdir):
     print(f"  - Rounds per batch: {rounds_per_batch}")
     print(f"  - Clip epsilon: {clip_epsilon}")
     print(f"  - KL coefficient: {kl_coef}")
+
+    # ============ 8. 初始化 vLLM ============
+    # vLLM更新频率（每N个batch更新一次vLLM使用的模型）
+    vllm_update_freq = getattr(config.training, 'vllm_update_freq', 5)
+    print(f"\nvLLM Configuration:")
+    print(f"  - Update frequency: every {vllm_update_freq} batches")
+    
+    # 创建vLLM模型保存目录
+    vllm_model_dir = os.path.join(workdir, "vllm_model")
+    os.makedirs(vllm_model_dir, exist_ok=True)
+    
+    # 初始保存base model（第一次使用）
+    print("\n[Init] Saving initial model for vLLM...")
+    merge_lora_for_vllm(model, tokenizer, vllm_model_dir)
+    
+    # 初始化vLLM生成器
+    vllm_generator = vLLMGenerator(vllm_model_dir, config, device)
 
     # ============ 9. 训练循环 ============
     print(f"\n{'='*60}")
@@ -297,7 +242,13 @@ def train_and_evaluate(config, workdir):
         epoch_updates = 0  # 记录更新次数
 
         for batch_idx, batch in enumerate(train_loader):
-            # ============ Phase 1: Rollout (生成256道题的回答) ============
+            # ============ Phase 0: 定期更新vLLM模型 ============
+            if batch_idx % vllm_update_freq == 0 and batch_idx > 0:
+                print(f"\n[vLLM Update] Batch {batch_idx}: Updating vLLM model...")
+                merge_lora_for_vllm(model, tokenizer, vllm_model_dir)
+                vllm_generator.reload_model(vllm_model_dir)
+            
+            # ============ Phase 1: Rollout ============
             print(f"\n[Rollout] Processing batch {batch_idx+1}")
             
             input_ids = batch['input_ids'].to(device)
@@ -307,30 +258,31 @@ def train_and_evaluate(config, workdir):
             rollout_batch_size = input_ids.shape[0]
             prompt_lengths = attention_mask.sum(dim=1)  # 每个样本的prompt长度
 
-            # 生成 responses
-            model.eval()
-            enable_kv_cache(model)
-            output = generate_multiple_times(
-                model,
-                generate_bs=config.generate_bs,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                generate_kwargs=generate_kwargs
-            )
+            # 将prompts转为文本
+            prompts = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
             
-            # 提取生成的部分
-            responses = output[:, input_ids.size(1):]  # [rollout_batch_size, response_length]
-            
-            # 评估生成质量 & 计算 rewards
-            decoded_responses = tokenizer.batch_decode(responses, skip_special_tokens=True)
+            # 使用vLLM生成（超快！）
+            responses_text = vllm_generator.generate(prompts)
+
             batch_correct = 0
             
-            for i, resp in enumerate(decoded_responses):
+            for i, resp in enumerate(responses_text):
                 final_answer = parse_answer(resp)
                 epoch_total += 1
                 if final_answer is not None and final_answer == int(ground_truth[i]):
                     batch_correct += 1
                     epoch_correct += 1
+            
+            # 将生成的文本转回token ids
+            responses_encoded = tokenizer(
+                responses_text,
+                padding=True,
+                truncation=True,
+                max_length=config.generation.max_new_tokens,
+                return_tensors="pt",
+                add_special_tokens=False,  # 不要添加额外的special tokens
+            )
+            responses = responses_encoded['input_ids'].to(device)
             
             rewards = compute_rewards(
                 responses, 
@@ -438,7 +390,7 @@ def train_and_evaluate(config, workdir):
                 policy_loss = -policy_objective
                 
                 # 4. KL divergence penalty
-                kl_div = (new_log_probs - train_ref_log_probs)
+                kl_div = (new_log_probs - train_ref_log_probs) ** 2
                 kl_div = (kl_div * train_response_mask).sum() / train_response_mask.sum()
                 kl_penalty = kl_coef * kl_div
                 
