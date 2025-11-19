@@ -13,6 +13,20 @@ from utils.qwen_util import enable_kv_cache, disable_kv_cache, generate_multiple
 from utils.reward_util import parse_answer, compute_rewards
 from utils.vllm_util import vLLMGenerator, merge_lora_for_vllm
 
+def save_response(responses, epoch, batch_idx, workdir):
+    """将生成的响应保存到文件中"""
+    response_dir = os.path.join(workdir, "responses")
+    os.makedirs(response_dir, exist_ok=True)
+    
+    filename = f"epoch_{epoch+1}_batch_{batch_idx+1}.txt"
+    filepath = os.path.join(response_dir, filename)
+    
+    with open(filepath, 'w') as f:
+        for i, resp in enumerate(responses):
+            f.write(f"Response {i+1}:\n{resp}\n\n")
+    
+    print(f"✓ Saved responses to {filepath}")
+
 def get_log_probs(model, input_ids, attention_mask, response_start_indices, forward_bs=None):
     """
     计算responses的log probabilities
@@ -244,7 +258,7 @@ def train_and_evaluate(config, workdir):
         for batch_idx, batch in enumerate(train_loader):
             # ============ Phase 0: 定期更新vLLM模型 ============
             if batch_idx % vllm_update_freq == 0 and batch_idx > 0:
-                print(f"\n[vLLM Update] Batch {batch_idx}: Updating vLLM model...")
+                print(f"\n[Update] Merging LoRA at batch {batch_idx}...")
                 merge_lora_for_vllm(model, tokenizer, vllm_model_dir)
                 vllm_generator.reload_model(vllm_model_dir)
             
@@ -263,6 +277,9 @@ def train_and_evaluate(config, workdir):
             
             # 使用vLLM生成（超快！）
             responses_text = vllm_generator.generate(prompts)
+
+            # save the responses in a file
+            save_response(responses_text, epoch, batch_idx, workdir)
 
             batch_correct = 0
             
@@ -466,6 +483,8 @@ def train_and_evaluate(config, workdir):
     print("Training Completed!")
     print(f"Best Accuracy: {best_accuracy:.2%}")
     print(f"{'='*60}\n")
+
+    vllm_generator.cleanup()
 
     wandb.finish()
     
