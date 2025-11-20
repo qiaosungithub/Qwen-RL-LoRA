@@ -88,7 +88,8 @@ class GMPOTrainer(GRPOTrainer):
         sgn_A_log_ratio_min = torch.min(sgn_A_log_ratio, sgn_A_log_ratio_clipped)
 
         # Recover the actual log_ratio after clipping
-        log_ratio_min = sgn_A * sgn_A_log_ratio_min
+        # Need to unsqueeze sgn_A for proper broadcasting: (B,) -> (B, 1)
+        log_ratio_min = sgn_A.unsqueeze(1) * sgn_A_log_ratio_min
 
         # Geometric mean: exp(sum(log_ratio) / count)
         # This is equivalent to: (prod rho_t)^(1/|o|)
