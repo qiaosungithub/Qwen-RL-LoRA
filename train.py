@@ -27,56 +27,65 @@ def save_response(responses, epoch, batch_idx, workdir):
     
     print(f"✓ Saved responses to {filepath}")
 
-def get_log_probs(model, input_ids, attention_mask, response_start_indices, forward_bs=None):
+def get_log_probs_streaming(model, input_ids, attention_mask, response_start_indices, forward_bs=None):
     """
-    计算responses的log probabilities
-    Args:
-        model: 语言模型
-        input_ids: [batch_size, seq_len] 完整的input (prompt + response)
-        attention_mask: [batch_size, seq_len]
-        response_start_indices: [batch_size] 每个样本response开始的位置
-    Returns:
-        log_probs: [batch_size, max_response_len] response部分的log probs
+    流式计算 log probs，不存储整个 logits，可大幅减少显存（避免几十GB）
     """
-    logits = model_forward_multiple_times(model, forward_bs, input_ids, attention_mask)  # [batch_size, seq_len, vocab_size]
-    
-    batch_size = input_ids.shape[0]
-    log_probs_list = []
-    
-    for i in range(batch_size):
-        start_idx = response_start_indices[i]
-        # 找到该样本的实际结束位置（排除padding）
-        end_idx = attention_mask[i].sum().item()
-        
-        if end_idx <= start_idx:
-            # 空response，创建一个dummy
-            log_probs_list.append(torch.zeros(1, device=input_ids.device))
-            continue
-        
-        # 提取response部分的logits (注意要取前一个位置的logits来预测当前token)
-        response_logits = logits[i, start_idx-1:end_idx-1, :]  # [response_len, vocab_size]
-        response_tokens = input_ids[i, start_idx:end_idx]      # [response_len]
-        
-        # 计算log probs
-        log_probs = F.log_softmax(response_logits, dim=-1)
-        selected_log_probs = log_probs.gather(
-            dim=-1,
-            index=response_tokens.unsqueeze(-1)
-        ).squeeze(-1)  # [response_len]
-        
-        log_probs_list.append(selected_log_probs)
-    
-    # Pad to same length
-    max_len = max(lp.shape[0] for lp in log_probs_list)
-    padded_log_probs = []
-    for lp in log_probs_list:
-        if lp.shape[0] < max_len:
-            # 用0填充（对应padding tokens的log prob）
-            padding = torch.zeros(max_len - lp.shape[0], device=lp.device)
-            lp = torch.cat([lp, padding])
-        padded_log_probs.append(lp)
-    
-    return torch.stack(padded_log_probs)  # [batch_size, max_response_len]
+    B, T = input_ids.shape
+    if forward_bs is None:
+        forward_bs = B
+    assert B % forward_bs == 0
+    num_chunks = B // forward_bs
+
+    all_log_probs = []  # list of [response_len] tensors（每个样本独立）
+
+    for ci in range(num_chunks):
+        s = ci * forward_bs
+        e = (ci + 1) * forward_bs
+
+        ids_chunk = input_ids[s:e]
+        mask_chunk = attention_mask[s:e]
+        start_chunk = response_start_indices[s:e]
+
+        # forward
+        outputs = model(input_ids=ids_chunk, attention_mask=mask_chunk)
+        logits_chunk = outputs.logits  # [chunk, T, V]
+        V = logits_chunk.shape[-1]
+
+        # 对 chunk 内的每一个样本提取 log prob
+        for bi in range(forward_bs):
+            start_idx = start_chunk[bi]
+            end_idx = mask_chunk[bi].sum().item()
+
+            if end_idx <= start_idx:
+                all_log_probs.append(torch.zeros(1, device=input_ids.device))
+                continue
+
+            # logits 应该使用前一个 token 的位置预测当前 token
+            resp_logits = logits_chunk[bi, start_idx-1:end_idx-1, :]  # [resp_len, V]
+            resp_tokens = ids_chunk[bi, start_idx:end_idx]            # [resp_len]
+
+            log_probs = F.log_softmax(resp_logits, dim=-1)
+            selected = log_probs.gather(dim=-1, index=resp_tokens.unsqueeze(-1)).squeeze(-1)
+
+            all_log_probs.append(selected)
+
+        # ⚠️ 关键：丢弃大 tensor
+        del logits_chunk, outputs
+        torch.cuda.empty_cache()
+
+        print(f"finished forward chunk {ci+1}/{num_chunks}")
+
+    # === Padding ===
+    max_len = max(lp.size(0) for lp in all_log_probs)
+    padded = []
+    for lp in all_log_probs:
+        if lp.size(0) < max_len:
+            pad = torch.zeros(max_len - lp.size(0), device=lp.device)
+            lp = torch.cat([lp, pad])
+        padded.append(lp)
+
+    return torch.stack(padded)  # [B, max_len]
 
 
 def train_and_evaluate(config, workdir):
@@ -322,8 +331,9 @@ def train_and_evaluate(config, workdir):
             # 获取 old log probs（rollout时的log probs）
             model.eval()
             disable_kv_cache(model)
+            torch.cuda.empty_cache()
             with torch.no_grad():
-                old_log_probs = get_log_probs(
+                old_log_probs = get_log_probs_streaming(
                     model, 
                     full_input_ids, 
                     full_attention_mask, 
@@ -332,7 +342,7 @@ def train_and_evaluate(config, workdir):
                 )  # [rollout_batch_size, max_response_len]
                 
                 # 同时获取 reference model 的 log probs（用于KL惩罚）
-                ref_log_probs = get_log_probs(
+                ref_log_probs = get_log_probs_streaming(
                     ref_model,
                     full_input_ids,
                     full_attention_mask,
@@ -362,6 +372,7 @@ def train_and_evaluate(config, workdir):
             # 计算总共需要的更新步数：256 * 3 / 32 = 24步
             total_updates = (rollout_batch_size * rounds_per_batch) // train_batch_size
             
+            torch.cuda.empty_cache()
             for update_idx in range(total_updates):
                 round_num = update_idx // (rollout_batch_size // train_batch_size) + 1
                 step_in_round = update_idx % (rollout_batch_size // train_batch_size) + 1
@@ -383,7 +394,7 @@ def train_and_evaluate(config, workdir):
                 # 前向传播获取新的 log probs
                 model.train()
                 disable_kv_cache(model)
-                new_log_probs = get_log_probs(
+                new_log_probs = get_log_probs_streaming(
                     model,
                     train_input_ids,
                     train_attention_mask,

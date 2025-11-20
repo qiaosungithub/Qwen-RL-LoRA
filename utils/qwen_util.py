@@ -39,6 +39,7 @@ def disable_kv_cache(model):
 
 @torch.no_grad()
 def generate_multiple_times(model, generate_bs, input_ids, attention_mask, generate_kwargs):
+    raise DeprecationWarning("This function is deprecated. Use vLLM for generation instead.")
     B = input_ids.shape[0]
     assert B % generate_bs == 0, "Batch size must be divisible by generate_bs"
     num_chunks = B // generate_bs
@@ -99,4 +100,5 @@ def model_forward_multiple_times(model, forward_bs, input_ids, attention_mask):
         output_chunk = model(input_ids=input_ids_chunk, attention_mask=attention_mask_chunk)
         # 关键修复：提取 logits
         logits_list.append(output_chunk.logits)
+        print(f'finished forward chunk {i+1}/{num_chunks}')
     return torch.cat(logits_list, dim=0)

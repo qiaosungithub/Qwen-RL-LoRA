@@ -39,7 +39,7 @@ class vLLMGenerator:
             "trust_remote_code": True,
             "dtype": "bfloat16",
             "tensor_parallel_size": 1,
-            "gpu_memory_utilization": 0.5,
+            "gpu_memory_utilization": 0.25,
             "max_model_len": self.config.dataset.max_length + self.config.generation.max_new_tokens,
             "download_dir": self.config.cache_dir,
         }
