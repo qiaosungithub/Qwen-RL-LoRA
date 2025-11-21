@@ -71,34 +71,42 @@ class GMPOTrainer(GRPOTrainer):
         log_ratio = per_token_logps - old_per_token_logps
 
         # ==================== KEY CHANGE: GMPO LOSS COMPUTATION ====================
-        # Instead of computing importance_weight * advantage at token level,
-        # we compute the geometric mean over tokens
+        # GMPO: geometric mean of |min[rho_t * A, clip(rho_t) * A]| * sgn(A)
+        # GRPO: arithmetic mean of min[rho_t * A, clip(rho_t) * A]
 
-        # Compute sign of advantage for each sequence
+        # Compute importance sampling ratio
+        ratio = torch.exp(log_ratio)  # (B, T)
+
+        # Clip the ratio
+        epsilon = 0.4  # GMPO uses wider clipping range (e^-0.4, e^0.4)
+        ratio_clipped = torch.clamp(ratio, torch.exp(torch.tensor(-epsilon)), torch.exp(torch.tensor(epsilon)))
+
+        # Compute importance-weighted advantages with clipping
+        # Shape: advantages.unsqueeze(1) -> (B, 1), broadcasts to (B, T)
+        weighted_advantages_1 = ratio * advantages.unsqueeze(1)
+        weighted_advantages_2 = ratio_clipped * advantages.unsqueeze(1)
+
+        # Take minimum (PPO-style clipping)
+        weighted_advantages_min = torch.min(weighted_advantages_1, weighted_advantages_2)  # (B, T)
+
+        # For GMPO: compute geometric mean of |weighted_advantages| over tokens
+        # geometric_mean = (prod |x_t|)^(1/T) = exp(mean(log|x_t|))
+        abs_weighted_advantages = torch.abs(weighted_advantages_min)  # (B, T)
+
+        # Add small epsilon to avoid log(0)
+        eps = 1e-8
+        log_abs_weighted = torch.log(abs_weighted_advantages + eps)  # (B, T)
+
+        # Compute mean of log values over valid tokens
+        geometric_mean_log = (log_abs_weighted * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)  # (B,)
+        geometric_mean = torch.exp(geometric_mean_log)  # (B,)
+
+        # Multiply by sign of advantage
         sgn_A = torch.sign(advantages)  # (B,)
+        gmpo_objective = geometric_mean * sgn_A  # (B,)
 
-        # Apply sign to log_ratio for proper clipping direction
-        sgn_A_log_ratio = sgn_A.unsqueeze(1) * log_ratio  # (B, T)
-
-        # Clip in log space (corresponds to paper's epsilon)
-        epsilon = 0.4  # GMPO uses wider clipping range
-        sgn_A_log_ratio_clipped = torch.clamp(sgn_A_log_ratio, -epsilon, epsilon)
-
-        # Take minimum (corresponds to min in the paper's objective)
-        sgn_A_log_ratio_min = torch.min(sgn_A_log_ratio, sgn_A_log_ratio_clipped)
-
-        # Recover the actual log_ratio after clipping
-        # Need to unsqueeze sgn_A for proper broadcasting: (B,) -> (B, 1)
-        log_ratio_min = sgn_A.unsqueeze(1) * sgn_A_log_ratio_min
-
-        # Geometric mean: exp(sum(log_ratio) / count)
-        # This is equivalent to: (prod rho_t)^(1/|o|)
-        geometric_mean_ratio = torch.exp(
-            (log_ratio_min * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-        )  # (B,)
-
-        # Final loss: -A * geometric_mean_ratio
-        loss = -(advantages * geometric_mean_ratio).mean()
+        # Loss is negative objective (we want to maximize the objective)
+        loss = -gmpo_objective.mean()
         loss = loss / self.current_gradient_accumulation_steps
         # ===========================================================================
 
