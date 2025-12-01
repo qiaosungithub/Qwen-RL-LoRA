@@ -10,6 +10,7 @@ import torch
 import os
 import wandb
 from pathlib import Path
+from datetime import datetime
 
 from datasets import load_dataset
 from peft import LoraConfig
@@ -46,6 +47,10 @@ def train(config: dict) -> str:
         os.environ["WANDB_PROJECT"] = config["wandb"]["project"]
         wandb.login()
 
+    # Add timestamp to output_dir
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_dir = f"{training_config['output_dir']}-{timestamp}"
+
     # Model
     tokenizer = AutoTokenizer.from_pretrained(
         model_config["name"],
@@ -72,7 +77,7 @@ def train(config: dict) -> str:
 
     # Training args
     training_args = GRPOConfig(
-        output_dir=training_config["output_dir"],
+        output_dir=output_dir,
         logging_steps=training_config["logging_steps"],
         per_device_train_batch_size=training_config["per_device_train_batch_size"],
         gradient_accumulation_steps=training_config["gradient_accumulation_steps"],
@@ -84,7 +89,7 @@ def train(config: dict) -> str:
         fp16=training_config["fp16"],
         bf16=training_config["bf16"],
         max_steps=training_config["max_steps"],
-        run_name=f"grpo-{Path(training_config['output_dir']).name}",
+        run_name=f"grpo-{Path(output_dir).name}",
         temperature=training_config["temperature"],
         top_p=training_config["top_p"],
     )
@@ -113,13 +118,13 @@ def train(config: dict) -> str:
     # Train
     print(f"\n{'='*60}")
     print(f"Training with GRPO")
-    print(f"Output: {training_config['output_dir']}")
+    print(f"Output: {output_dir}")
     print(f"{'='*60}\n")
 
     trainer.train()
 
     # Save
-    final_path = f"{training_config['output_dir']}-final"
+    final_path = f"{output_dir}-final"
     trainer.save_model(final_path)
     print(f"\nModel saved to {final_path}")
 

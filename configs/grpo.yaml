@@ -7,4 +7,4 @@ method: grpo
 training:
   output_dir: outputs/qwen-grpo-gsm8k
   per_device_train_batch_size: 4
-  num_generations: 16           # More generations = better advantage estimates
+  num_generations: 8

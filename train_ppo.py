@@ -9,6 +9,8 @@ Usage:
 import torch
 import os
 import wandb
+from pathlib import Path
+from datetime import datetime
 
 from datasets import load_dataset
 from peft import LoraConfig
@@ -44,6 +46,10 @@ def train(config: dict) -> str:
     if config["wandb"]["enabled"]:
         os.environ["WANDB_PROJECT"] = config["wandb"]["project"]
         wandb.login()
+
+    # Add timestamp to output_dir
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    output_dir = f"{training_config['output_dir']}-{timestamp}"
 
     # Model with value head
     tokenizer = AutoTokenizer.from_pretrained(
@@ -88,7 +94,7 @@ def train(config: dict) -> str:
 
     # PPO config
     ppo_config = PPOConfig(
-        output_dir=training_config["output_dir"],
+        output_dir=output_dir,
         learning_rate=training_config["learning_rate"],
         batch_size=training_config["batch_size"],
         mini_batch_size=training_config["mini_batch_size"],
@@ -121,7 +127,7 @@ def train(config: dict) -> str:
 
     print(f"\n{'='*60}")
     print(f"Training with PPO")
-    print(f"Output: {training_config['output_dir']}")
+    print(f"Output: {output_dir}")
     print(f"{'='*60}\n")
 
     step = 0
@@ -199,7 +205,7 @@ def train(config: dict) -> str:
             break
 
     # Save
-    final_path = f"{training_config['output_dir']}-final"
+    final_path = f"{output_dir}-final"
     trainer.save_pretrained(final_path)
     print(f"\nModel saved to {final_path}")
 
