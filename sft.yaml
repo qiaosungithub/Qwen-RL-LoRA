@@ -1,0 +1,66 @@
+# Base Configuration - shared across all methods
+# Method-specific configs inherit from this and override as needed
+
+# Model
+model:
+  name: Qwen/Qwen3-8B
+  torch_dtype: bfloat16
+  attn_implementation: flash_attention_2
+  cache_dir: .cache/models
+
+# LoRA
+# - Higher rank (32-64) often works better for RL than SFT
+# - lora_alpha = 2 * r is a common heuristic
+lora:
+  r: 32
+  lora_alpha: 64
+  target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  task_type: CAUSAL_LM
+
+# Training (common settings)
+training:
+  output_dir: outputs/qwen-sft-gsm8k
+  max_steps: 500
+  learning_rate: 1.0e-5         # Slightly higher LR for RL
+  warmup_ratio: 0.03            # Warmup helps stability
+  gradient_accumulation_steps: 2
+  logging_steps: 10
+  save_steps: 100
+  bf16: true
+  fp16: false
+
+  # Generation settings
+  max_prompt_length: 512
+  max_completion_length: 1024   # Longer for chain-of-thought
+
+  # Sampling settings
+  do_sample: true
+  temperature: 0.8
+  top_p: 0.95
+
+# Dataset
+dataset:
+  name: openai/gsm8k
+  config: main
+  split: train
+  cache_dir: .cache/datasets
+
+# Reward
+# - Sparse rewards (correct/incorrect) are simpler and often work well
+# - Format reward helps the model learn the output structure faster
+# - Ratio matters: correctness should dominate
+reward:
+  format_reward: 0.5            # Small bonus for correct format
+  correctness_reward: 2.0       # Main reward signal
+
+# Wandb
+wandb:
+  project: qwen-rl-lora-gsm8k
+  enabled: true

@@ -1,4 +1,4 @@
-# conda activate your_env_name
+conda activate rl-lora
 
 HERE=$(pwd)
 
