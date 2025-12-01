@@ -7,6 +7,7 @@ Usage:
     python train_rl.py --config configs/grpo.yaml
     python train_rl.py --config configs/gmpo.yaml
     python train_rl.py --config configs/ppo.yaml
+    python train_rl.py --config configs/rloo.yaml
 
     # Override config values from command line:
     python train_rl.py --config configs/grpo.yaml --training.max_steps 500 --training.learning_rate 1e-5
@@ -61,8 +62,11 @@ def main():
     elif method == "ppo":
         from train_ppo import train
         train(config)
+    elif method == "rloo":
+        from train_rloo import train
+        train(config)
     else:
-        raise ValueError(f"Unknown method: {method}. Choose from: grpo, gmpo, ppo")
+        raise ValueError(f"Unknown method: {method}. Choose from: grpo, gmpo, ppo, rloo")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+# RLOO Configuration (REINFORCE Leave-One-Out)
+# Inherits from base.yaml
+
+base: base.yaml
+method: rloo
+
+training:
+  output_dir: outputs/qwen-rloo-gsm8k
+  per_device_train_batch_size: 4
+  num_generations: 16
+
+  # RLOO-specific: KL penalty coefficient
+  kl_coef: 0.05
