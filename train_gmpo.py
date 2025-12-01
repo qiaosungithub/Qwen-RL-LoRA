@@ -79,7 +79,7 @@ class GMPOTrainer(GRPOTrainer):
 
         # Clip the ratio
         epsilon = 0.4  # GMPO uses wider clipping range (e^-0.4, e^0.4)
-        ratio_clipped = torch.clamp(ratio, torch.exp(torch.tensor(-epsilon)), torch.exp(torch.tensor(epsilon)))
+        ratio_clipped = torch.clamp(ratio, torch.exp(torch.tensor(-epsilon)).to(ratio.device), torch.exp(torch.tensor(epsilon)).to(ratio.device))  # (B, T)
 
         # Compute importance-weighted advantages with clipping
         # Shape: advantages.unsqueeze(1) -> (B, 1), broadcasts to (B, T)
@@ -123,6 +123,15 @@ class GMPOTrainer(GRPOTrainer):
 
         clip_ratio = ((is_low_clipped | is_high_clipped).float() * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
         self._metrics[mode]["clip_ratio/region_mean"].append(self.accelerator.gather(clip_ratio).nanmean().item())
+
+        # Debug output
+        print(f"\n=== GMPO Debug ===")
+        print(f"Advantages: min={advantages.min().item():.4f}, max={advantages.max().item():.4f}, mean={advantages.mean().item():.4f}, std={advantages.std().item():.4f}")
+        print(f"Geometric mean: min={geometric_mean.min().item():.4f}, max={geometric_mean.max().item():.4f}, mean={geometric_mean.mean().item():.4f}")
+        print(f"GMPO objective (before mean): {gmpo_objective}")
+        print(f"GMPO objective: mean={gmpo_objective.mean().item():.6f}, sum={gmpo_objective.sum().item():.6f}")
+        print(f"Final loss: {loss.item():.6e}")
+        print(f"==================\n")
 
         return loss
 
