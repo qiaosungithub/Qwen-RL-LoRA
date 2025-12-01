@@ -24,6 +24,7 @@ BASE_CONFIG = {
         "torch_dtype": "bfloat16",
         "attn_implementation": "flash_attention_2",
         "cache_dir": ".cache/models",
+        "device": "cuda",
     },
     "lora": {
         "r": 32,
@@ -252,11 +253,11 @@ def train_sft(config: dict) -> str:
 
     model = AutoModelForCausalLM.from_pretrained(
         model_config["name"],
-        torch_dtype=get_torch_dtype(model_config["torch_dtype"]),
+        dtype=get_torch_dtype(model_config["torch_dtype"]),
         attn_implementation=model_config["attn_implementation"],
         cache_dir=model_config["cache_dir"],
-        device_map=None,
-    ).to("cuda")
+        device_map="cuda:0",
+    )
     
     # Dataset
     dataset = load_dataset(
@@ -318,8 +319,16 @@ def train_sft(config: dict) -> str:
     
     return final_path
 
-def main():
-    train_sft(BASE_CONFIG)
+def main(config: dict) -> str:
+    final_path = train_sft(config)
+    return final_path
     
 if __name__ == "__main__":
-    main()
+    _SFT_OVERRIDES = {
+        "training": {
+            "output_dir": "outputs/qwen-sft-gsm8k",
+        }
+    }
+    CONFIG = deep_merge(BASE_CONFIG, _SFT_OVERRIDES)
+    final_path = main(CONFIG)
+    print(f"Training completed. Model saved at: {final_path}")

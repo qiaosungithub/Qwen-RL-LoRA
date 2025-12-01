@@ -1,4 +1,12 @@
-# conda activate your_env_name
+#!/bin/bash
+#SBATCH --account=bowenyu
+#SBATCH --job-name=SFT_LoRA
+#SBATCH --gres=gpu:1
+#SBATCH --time=1-00:00
+#SBATCH --output="bin/%x_%j.out"
+
+conda init bash
+conda activate rl_lora
 
 HERE=$(pwd)
 
@@ -17,4 +25,4 @@ python -m wandb login $WANDB_API_KEY
 sleep 1
 python -m wandb login
 
-python main.py --workdir=${LOGDIR} --config=configs/load_config.py:run
+python sft.py --workdir=${LOGDIR} --config=configs/load_config.py:run
