@@ -1,0 +1,10 @@
+# GRPO Configuration
+# Inherits from base.yaml
+
+base: base.yaml
+method: grpo
+
+training:
+  output_dir: outputs/qwen-grpo-gsm8k
+  per_device_train_batch_size: 4
+  num_generations: 16           # More generations = better advantage estimates

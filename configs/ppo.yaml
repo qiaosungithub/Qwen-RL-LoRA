@@ -1,0 +1,22 @@
+# PPO Configuration
+# Inherits from base.yaml
+
+base: base.yaml
+method: ppo
+
+training:
+  output_dir: outputs/qwen-ppo-gsm8k
+
+  # PPO-specific settings
+  batch_size: 4
+  mini_batch_size: 2
+  ppo_epochs: 4                 # Multiple epochs per batch
+  max_grad_norm: 1.0
+  target_kl: 0.05               # Lower KL = more conservative updates
+  kl_penalty: kl
+  max_new_tokens: 1024
+
+  # Generation: use sampling for exploration
+  do_sample: true
+  top_p: 0.95
+  temperature: 0.8

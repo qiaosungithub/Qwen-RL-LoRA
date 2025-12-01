@@ -1,0 +1,14 @@
+# GMPO Configuration (Geometric Mean Policy Optimization)
+# Inherits from base.yaml
+
+base: base.yaml
+method: gmpo
+
+training:
+  output_dir: outputs/qwen-gmpo-gsm8k
+  per_device_train_batch_size: 4
+  num_generations: 16
+
+  # GMPO uses wider clipping range for stability
+  clip_epsilon: 0.4
+  debug: false
