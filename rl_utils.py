@@ -172,6 +172,7 @@ BASE_CONFIG = {
         "name": "Qwen/Qwen3-8B",
         "torch_dtype": "bfloat16",
         "attn_implementation": "flash_attention_2",
+        "cache_dir": ".cache/models",
     },
     "lora": {
         "r": 32,
@@ -196,6 +197,7 @@ BASE_CONFIG = {
         "name": "openai/gsm8k",
         "config": "main",
         "split": "train",
+        "cache_dir": ".cache/datasets",
     },
     "reward": {
         "format_reward": 0.5,

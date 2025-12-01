@@ -46,7 +46,10 @@ def train(config: dict) -> str:
         wandb.login()
 
     # Model with value head
-    tokenizer = AutoTokenizer.from_pretrained(model_config["name"])
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config["name"],
+        cache_dir=model_config["cache_dir"],
+    )
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
@@ -61,6 +64,7 @@ def train(config: dict) -> str:
         model_config["name"],
         torch_dtype=get_torch_dtype(model_config["torch_dtype"]),
         attn_implementation=model_config["attn_implementation"],
+        cache_dir=model_config["cache_dir"],
         device_map=None,
         peft_config=peft_config,
     ).to("cuda")
@@ -69,6 +73,7 @@ def train(config: dict) -> str:
         model_config["name"],
         torch_dtype=get_torch_dtype(model_config["torch_dtype"]),
         attn_implementation=model_config["attn_implementation"],
+        cache_dir=model_config["cache_dir"],
         device_map=None,
     ).to("cuda")
 
@@ -76,7 +81,8 @@ def train(config: dict) -> str:
     dataset = load_dataset(
         dataset_config["name"],
         dataset_config["config"],
-        split=dataset_config["split"]
+        split=dataset_config["split"],
+        cache_dir=dataset_config["cache_dir"],
     )
     dataset = dataset.map(format_data)
 
