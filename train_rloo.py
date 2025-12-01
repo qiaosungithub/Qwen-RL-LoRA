@@ -94,7 +94,7 @@ def train(config: dict) -> str:
         temperature=training_config["temperature"],
         top_p=training_config["top_p"],
         # RLOO-specific
-        kl_coef=training_config["kl_coef"],
+        beta=training_config["kl_coef"],
     )
 
     peft_config = LoraConfig(
