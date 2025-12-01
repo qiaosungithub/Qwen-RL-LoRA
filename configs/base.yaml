@@ -38,6 +38,11 @@ training:
   max_prompt_length: 512
   max_completion_length: 1024   # Longer for chain-of-thought
 
+  # Sampling settings
+  do_sample: true
+  temperature: 0.8
+  top_p: 0.95
+
 # Dataset
 dataset:
   name: openai/gsm8k
@@ -50,9 +55,9 @@ dataset:
 # - Ratio matters: correctness should dominate
 reward:
   format_reward: 0.5            # Small bonus for correct format
-  correctness_reward: 1.5       # Main reward signal
+  correctness_reward: 2.0       # Main reward signal
 
 # Wandb
 wandb:
-  project: rl-qwen-gsm8k
+  project: qwen-rl-lora-gsm8k
   enabled: true

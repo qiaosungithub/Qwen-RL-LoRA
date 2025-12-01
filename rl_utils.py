@@ -46,7 +46,7 @@ def check_format(text: str) -> bool:
 # Reward Functions
 # ============================================================================
 
-def create_reward_funcs(format_reward: float = 0.5, correctness_reward: float = 2.0):
+def create_reward_funcs(format_reward: float, correctness_reward: float):
     """Create reward functions with configurable reward values."""
 
     def format_reward_func(completions, **kwargs):
@@ -72,7 +72,7 @@ def create_reward_funcs(format_reward: float = 0.5, correctness_reward: float = 
 
 
 def compute_single_reward(response: str, correct_answer: str,
-                          format_reward: float = 0.5, correctness_reward: float = 2.0) -> float:
+                          format_reward: float, correctness_reward: float) -> float:
     """Compute reward for a single response (used by PPO)."""
     reward = 0.0
 
@@ -161,3 +161,48 @@ def get_torch_dtype(dtype_str: str):
         "float32": torch.float32,
     }
     return mapping.get(dtype_str, torch.bfloat16)
+
+
+# ============================================================================
+# Shared Default Config (matches base.yaml)
+# ============================================================================
+
+BASE_CONFIG = {
+    "model": {
+        "name": "Qwen/Qwen3-8B",
+        "torch_dtype": "bfloat16",
+        "attn_implementation": "flash_attention_2",
+    },
+    "lora": {
+        "r": 32,
+        "lora_alpha": 64,
+        "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "task_type": "CAUSAL_LM",
+    },
+    "training": {
+        "max_steps": 500,
+        "learning_rate": 1e-5,
+        "gradient_accumulation_steps": 2,
+        "logging_steps": 10,
+        "bf16": True,
+        "fp16": False,
+        "max_prompt_length": 512,
+        "max_completion_length": 1024,
+        "do_sample": True,
+        "temperature": 0.8,
+        "top_p": 0.95,
+    },
+    "dataset": {
+        "name": "openai/gsm8k",
+        "config": "main",
+        "split": "train",
+    },
+    "reward": {
+        "format_reward": 0.5,
+        "correctness_reward": 1.5,
+    },
+    "wandb": {
+        "project": "rl-qwen-gsm8k",
+        "enabled": True,
+    },
+}

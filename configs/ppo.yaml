@@ -14,9 +14,3 @@ training:
   max_grad_norm: 1.0
   target_kl: 0.05               # Lower KL = more conservative updates
   kl_penalty: kl
-  max_new_tokens: 1024
-
-  # Generation: use sampling for exploration
-  do_sample: true
-  top_p: 0.95
-  temperature: 0.8

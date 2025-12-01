@@ -17,10 +17,11 @@ from trl import GRPOConfig, GRPOTrainer
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from rl_utils import (
-    SYSTEM_PROMPT,
     format_data,
     create_reward_funcs,
     get_torch_dtype,
+    deep_merge,
+    BASE_CONFIG,
 )
 
 
@@ -52,14 +53,14 @@ def train(config: dict) -> str:
     model = AutoModelForCausalLM.from_pretrained(
         model_config["name"],
         torch_dtype=get_torch_dtype(model_config["torch_dtype"]),
-        attn_implementation=model_config.get("attn_implementation", "flash_attention_2"),
+        attn_implementation=model_config["attn_implementation"],
         device_map=None,
     ).to("cuda")
 
     # Dataset
     dataset = load_dataset(
         dataset_config["name"],
-        dataset_config.get("config", "main"),
+        dataset_config["config"],
         split=dataset_config["split"]
     )
     dataset = dataset.map(format_data)
@@ -67,18 +68,20 @@ def train(config: dict) -> str:
     # Training args
     training_args = GRPOConfig(
         output_dir=training_config["output_dir"],
-        logging_steps=training_config.get("logging_steps", 1),
-        per_device_train_batch_size=training_config.get("per_device_train_batch_size", 8),
-        gradient_accumulation_steps=training_config.get("gradient_accumulation_steps", 1),
-        num_generations=training_config.get("num_generations", 8),
-        max_prompt_length=training_config.get("max_prompt_length", 512),
-        max_completion_length=training_config.get("max_completion_length", 512),
+        logging_steps=training_config["logging_steps"],
+        per_device_train_batch_size=training_config["per_device_train_batch_size"],
+        gradient_accumulation_steps=training_config["gradient_accumulation_steps"],
+        num_generations=training_config["num_generations"],
+        max_prompt_length=training_config["max_prompt_length"],
+        max_completion_length=training_config["max_completion_length"],
         learning_rate=training_config["learning_rate"],
         report_to="wandb" if config["wandb"]["enabled"] else "none",
-        fp16=training_config.get("fp16", False),
-        bf16=training_config.get("bf16", True),
+        fp16=training_config["fp16"],
+        bf16=training_config["bf16"],
         max_steps=training_config["max_steps"],
         run_name=f"grpo-{Path(training_config['output_dir']).name}",
+        temperature=training_config["temperature"],
+        top_p=training_config["top_p"],
     )
 
     peft_config = LoraConfig(
@@ -89,8 +92,8 @@ def train(config: dict) -> str:
     )
 
     reward_funcs = create_reward_funcs(
-        format_reward=reward_config.get("format_reward", 0.5),
-        correctness_reward=reward_config.get("correctness_reward", 2.0),
+        format_reward=reward_config["format_reward"],
+        correctness_reward=reward_config["correctness_reward"],
     )
 
     trainer = GRPOTrainer(
@@ -122,46 +125,17 @@ def train(config: dict) -> str:
 # Standalone execution with default config
 # ============================================================================
 
-DEFAULT_CONFIG = {
+# GRPO-specific overrides
+_GRPO_OVERRIDES = {
     "method": "grpo",
-    "model": {
-        "name": "Qwen/Qwen2.5-1.5B-Instruct",
-        "torch_dtype": "bfloat16",
-        "attn_implementation": "flash_attention_2",
-    },
-    "lora": {
-        "r": 16,
-        "lora_alpha": 32,
-        "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        "task_type": "CAUSAL_LM",
-    },
     "training": {
-        "output_dir": "qwen-grpo-gsm8k",
-        "max_steps": 200,
-        "learning_rate": 5e-6,
-        "per_device_train_batch_size": 8,
-        "gradient_accumulation_steps": 1,
-        "num_generations": 8,
-        "max_prompt_length": 512,
-        "max_completion_length": 512,
-        "logging_steps": 1,
-        "bf16": True,
-        "fp16": False,
-    },
-    "dataset": {
-        "name": "openai/gsm8k",
-        "config": "main",
-        "split": "train",
-    },
-    "reward": {
-        "format_reward": 0.5,
-        "correctness_reward": 2.0,
-    },
-    "wandb": {
-        "project": "grpo-qwen-gsm8k",
-        "enabled": True,
+        "output_dir": "outputs/qwen-grpo-gsm8k",
+        "per_device_train_batch_size": 4,
+        "num_generations": 16,
     },
 }
+
+DEFAULT_CONFIG = deep_merge(BASE_CONFIG, _GRPO_OVERRIDES)
 
 
 def main():

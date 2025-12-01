@@ -19,6 +19,8 @@ from rl_utils import (
     format_data,
     compute_single_reward,
     get_torch_dtype,
+    deep_merge,
+    BASE_CONFIG,
 )
 
 
@@ -58,7 +60,7 @@ def train(config: dict) -> str:
     model = AutoModelForCausalLMWithValueHead.from_pretrained(
         model_config["name"],
         torch_dtype=get_torch_dtype(model_config["torch_dtype"]),
-        attn_implementation=model_config.get("attn_implementation", "flash_attention_2"),
+        attn_implementation=model_config["attn_implementation"],
         device_map=None,
         peft_config=peft_config,
     ).to("cuda")
@@ -66,14 +68,14 @@ def train(config: dict) -> str:
     ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(
         model_config["name"],
         torch_dtype=get_torch_dtype(model_config["torch_dtype"]),
-        attn_implementation=model_config.get("attn_implementation", "flash_attention_2"),
+        attn_implementation=model_config["attn_implementation"],
         device_map=None,
     ).to("cuda")
 
     # Dataset
     dataset = load_dataset(
         dataset_config["name"],
-        dataset_config.get("config", "main"),
+        dataset_config["config"],
         split=dataset_config["split"]
     )
     dataset = dataset.map(format_data)
@@ -82,13 +84,13 @@ def train(config: dict) -> str:
     ppo_config = PPOConfig(
         output_dir=training_config["output_dir"],
         learning_rate=training_config["learning_rate"],
-        batch_size=training_config.get("batch_size", 8),
-        mini_batch_size=training_config.get("mini_batch_size", 4),
-        gradient_accumulation_steps=training_config.get("gradient_accumulation_steps", 1),
-        ppo_epochs=training_config.get("ppo_epochs", 4),
-        max_grad_norm=training_config.get("max_grad_norm", 0.5),
-        target_kl=training_config.get("target_kl", 0.1),
-        kl_penalty=training_config.get("kl_penalty", "kl"),
+        batch_size=training_config["batch_size"],
+        mini_batch_size=training_config["mini_batch_size"],
+        gradient_accumulation_steps=training_config["gradient_accumulation_steps"],
+        ppo_epochs=training_config["ppo_epochs"],
+        max_grad_norm=training_config["max_grad_norm"],
+        target_kl=training_config["target_kl"],
+        kl_penalty=training_config["kl_penalty"],
         log_with="wandb" if config["wandb"]["enabled"] else None,
     )
 
@@ -101,15 +103,15 @@ def train(config: dict) -> str:
 
     # Training params
     max_steps = training_config["max_steps"]
-    max_new_tokens = training_config.get("max_new_tokens", 512)
-    batch_size = training_config.get("batch_size", 8)
-    do_sample = training_config.get("do_sample", True)
-    top_p = training_config.get("top_p", 0.9)
-    temperature = training_config.get("temperature", 0.7)
-    logging_steps = training_config.get("logging_steps", 10)
+    max_new_tokens = training_config["max_completion_length"]
+    batch_size = training_config["batch_size"]
+    do_sample = training_config["do_sample"]
+    top_p = training_config["top_p"]
+    temperature = training_config["temperature"]
+    logging_steps = training_config["logging_steps"]
 
-    format_reward = reward_config.get("format_reward", 0.5)
-    correctness_reward = reward_config.get("correctness_reward", 2.0)
+    format_reward = reward_config["format_reward"]
+    correctness_reward = reward_config["correctness_reward"]
 
     print(f"\n{'='*60}")
     print(f"Training with PPO")
@@ -202,50 +204,21 @@ def train(config: dict) -> str:
 # Standalone execution with default config
 # ============================================================================
 
-DEFAULT_CONFIG = {
+# PPO-specific overrides
+_PPO_OVERRIDES = {
     "method": "ppo",
-    "model": {
-        "name": "Qwen/Qwen2.5-1.5B-Instruct",
-        "torch_dtype": "bfloat16",
-        "attn_implementation": "flash_attention_2",
-    },
-    "lora": {
-        "r": 16,
-        "lora_alpha": 32,
-        "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        "task_type": "CAUSAL_LM",
-    },
     "training": {
-        "output_dir": "qwen-ppo-gsm8k",
-        "max_steps": 200,
-        "learning_rate": 5e-6,
-        "batch_size": 8,
-        "mini_batch_size": 4,
-        "gradient_accumulation_steps": 1,
+        "output_dir": "outputs/qwen-ppo-gsm8k",
+        "batch_size": 4,
+        "mini_batch_size": 2,
         "ppo_epochs": 4,
-        "max_grad_norm": 0.5,
-        "target_kl": 0.1,
+        "max_grad_norm": 1.0,
+        "target_kl": 0.05,
         "kl_penalty": "kl",
-        "max_new_tokens": 512,
-        "do_sample": True,
-        "top_p": 0.9,
-        "temperature": 0.7,
-        "logging_steps": 10,
-    },
-    "dataset": {
-        "name": "openai/gsm8k",
-        "config": "main",
-        "split": "train",
-    },
-    "reward": {
-        "format_reward": 0.5,
-        "correctness_reward": 2.0,
-    },
-    "wandb": {
-        "project": "ppo-qwen-gsm8k",
-        "enabled": True,
     },
 }
+
+DEFAULT_CONFIG = deep_merge(BASE_CONFIG, _PPO_OVERRIDES)
 
 
 def main():
