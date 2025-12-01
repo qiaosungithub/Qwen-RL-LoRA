@@ -7,6 +7,9 @@ def get_config():
     '''Get the default hyperparameter configuration.'''
     config = ml_collections.ConfigDict()
 
+    # Algorithm selection
+    config.algorithm = 'ppo'  # 'ppo', 'capo', 'grpo', etc.
+
     # Model
     config.model = model = ml_collections.ConfigDict()
     model.name = 'InvalidModel'
@@ -33,6 +36,17 @@ def get_config():
     ppo.kl_coef = 0.1
     ppo.reward_correct = 0.5
     ppo.reward_wrong = -0.5
+
+    # capo
+    config.capo = capo = ml_collections.ConfigDict()
+    capo.verifier_model = 'gpt-4o-mini'
+    capo.verifier_api_type = 'dummy'  # 'openai', 'qwen', 'dummy'
+    capo.whole_weight = 1.0
+    capo.process_weight = 0.5
+    capo.step_penalty = -0.3
+    capo.step_split_mode = 'newline'  # 'newline', 'sentence', 'marker'
+    capo.max_steps = 20
+    capo.fallback_on_error = True
 
     # Training
     config.training = training = ml_collections.ConfigDict()

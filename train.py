@@ -12,6 +12,8 @@ from gsmhard_dataloader import create_gsmhard_dataloader
 from utils.qwen_util import enable_kv_cache, disable_kv_cache, generate_multiple_times, model_forward_multiple_times
 from utils.reward_util import parse_answer, compute_rewards
 from utils.vllm_util import vLLMGenerator, merge_lora_for_vllm
+from utils.capo_verifier import VerifierClient
+from utils.capo_credit import compute_capo_rewards
 
 def save_response(responses, epoch, batch_idx, workdir):
     """将生成的响应保存到文件中"""
@@ -107,6 +109,15 @@ def train_and_evaluate(config, workdir):
     wandb.init(project="qwen-ppo-lora", dir=workdir, tags=['try'])
     wandb.config.update(config.to_dict())
     wandb.run.notes = config.wandb_notes
+
+    # Initialize CAPO verifier if needed
+    verifier_client = None
+    if config.algorithm == 'capo':
+        print("\nInitializing CAPO verifier...")
+        verifier_client = VerifierClient(config)
+        print(f"  - API type: {config.capo.verifier_api_type}")
+        print(f"  - Model: {config.capo.verifier_model}")
+        print(f"  - Step split mode: {config.capo.step_split_mode}")
 
     # ============ 1. 加载 Policy Model ============
     print("Loading policy model...")
@@ -310,13 +321,23 @@ def train_and_evaluate(config, workdir):
             )
             responses = responses_encoded['input_ids'].to(device)
             
-            rewards = compute_rewards(
-                responses, 
-                ground_truth, 
-                tokenizer,
-                reward_correct=config.ppo.reward_correct,
-                reward_wrong=config.ppo.reward_wrong
-            )  # [rollout_batch_size, response_length]
+            # Compute rewards based on algorithm
+            if config.algorithm == 'capo':
+                rewards = compute_capo_rewards(
+                    responses,
+                    ground_truth,
+                    tokenizer,
+                    verifier_client,
+                    config
+                )  # [rollout_batch_size, response_length]
+            else:
+                rewards = compute_rewards(
+                    responses, 
+                    ground_truth, 
+                    tokenizer,
+                    reward_correct=config.ppo.reward_correct,
+                    reward_wrong=config.ppo.reward_wrong
+                )  # [rollout_batch_size, response_length]
             
             # 构建完整序列（prompt + response）
             full_input_ids = torch.cat([input_ids, responses], dim=1)
@@ -367,6 +388,14 @@ def train_and_evaluate(config, workdir):
                   f"Accuracy: {rollout_accuracy:.2%} | "
                   f"Avg Reward: {avg_reward:.3f} | "
                   f"Correct: {batch_correct}, Wrong: {rollout_batch_size - batch_correct}")
+            
+            # CAPO-specific logging
+            if config.algorithm == 'capo' and verifier_client is not None:
+                metrics = verifier_client.metrics
+                avg_wrong_steps = metrics.get('avg_wrong_steps', 0)
+                fallback_rate = metrics.get('fallback_rate', 0)
+                print(f"  [CAPO] Avg wrong steps: {avg_wrong_steps:.2f} | "
+                      f"Fallback rate: {fallback_rate:.1%}")
             
             # ============ Phase 2: 多轮PPO更新 (对256题过3轮，每次32题) ============
             # 计算总共需要的更新步数：256 * 3 / 32 = 24步

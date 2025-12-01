@@ -1,0 +1,47 @@
+algorithm: 'capo'
+
+device: 'cuda:0'
+cache_dir: '/data/scratch-oc40/sqa/cache'
+wandb_notes: 'CAPO experiment'
+generate_bs: 4
+
+model:
+    name: Qwen/Qwen2.5-0.5B-Instruct  # Small model for testing
+
+dataset:
+    name: gsm8k
+    max_length: 512
+
+lora:
+    rank: 2
+    alpha: 32
+    dropout: 0.05
+
+training:
+    batch_size: 32
+    train_batch_size: 4
+    rounds_per_batch: 3
+    num_epochs: 2
+    learning_rate: 0.0001
+    max_grad_norm: 1.0
+    max_steps_per_epoch: 10  # Small for testing
+    save_every: 1
+    log_interval: 10
+    vllm_update_freq: 5
+    seed: 42
+
+ppo:
+    clip_epsilon: 0.2
+    kl_coef: 0.01
+    reward_correct: 0.5
+    reward_wrong: -0.5
+
+capo:
+    verifier_api_type: 'dummy'  # Use dummy for testing without API costs
+    verifier_model: 'gpt-4o-mini'
+    whole_weight: 1.0
+    process_weight: 0.5
+    step_penalty: -0.3
+    step_split_mode: 'newline'
+    max_steps: 20
+    fallback_on_error: true
