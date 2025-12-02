@@ -93,8 +93,6 @@ def train(config: dict) -> str:
         run_name=f"rloo-{Path(output_dir).name}",
         temperature=training_config["temperature"],
         top_p=training_config["top_p"],
-        # RLOO-specific
-        beta=training_config["kl_coef"],
     )
 
     peft_config = LoraConfig(

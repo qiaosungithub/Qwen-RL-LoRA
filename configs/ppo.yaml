@@ -6,11 +6,10 @@ method: ppo
 
 training:
   output_dir: outputs/qwen-ppo-gsm8k
+  per_device_train_batch_size: 4
 
   # PPO-specific settings
-  batch_size: 4
-  mini_batch_size: 2
-  ppo_epochs: 4                 # Multiple epochs per batch
-  max_grad_norm: 1.0
-  target_kl: 0.05               # Lower KL = more conservative updates
-  kl_penalty: kl
+  ppo_epochs: 4                 # Number of PPO update epochs per batch
+  kl_coef: 0.05                 # KL divergence coefficient
+  cliprange: 0.2                # PPO clipping range
+  vf_coef: 0.1                  # Value function loss coefficient
