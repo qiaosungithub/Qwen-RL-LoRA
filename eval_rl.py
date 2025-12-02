@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument("--model_path", type=str, default=None, help="Override model path")
     parser.add_argument("--max_samples", type=int, default=None, help="Max samples to evaluate")
     parser.add_argument("--max_new_tokens", type=int, default=512, help="Max new tokens to generate")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for parallel evaluation")
     return parser.parse_args()
 
 
@@ -44,14 +45,19 @@ def extract_ground_truth(answer_text: str) -> str:
     return answer_text.split("#### ")[-1].strip()
 
 
-def evaluate_model(model, tokenizer, dataset, max_new_tokens, desc="Evaluating"):
+def evaluate_model(model, tokenizer, dataset, max_new_tokens, batch_size=8, desc="Evaluating"):
     """Evaluate a model on the dataset and return results."""
     correct = 0
     format_correct = 0
     total = 0
     results = []
 
-    for i, example in enumerate(tqdm(dataset, desc=desc)):
+    # Prepare all prompts and ground truths
+    all_prompts = []
+    all_questions = []
+    all_ground_truths = []
+
+    for example in dataset:
         question = example["question"]
         ground_truth = extract_ground_truth(example["answer"])
 
@@ -64,7 +70,28 @@ def evaluate_model(model, tokenizer, dataset, max_new_tokens, desc="Evaluating")
             messages, tokenize=False, add_generation_prompt=True
         )
 
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        all_prompts.append(prompt)
+        all_questions.append(question)
+        all_ground_truths.append(ground_truth)
+
+    # Process in batches
+    num_batches = (len(all_prompts) + batch_size - 1) // batch_size
+
+    for batch_idx in tqdm(range(num_batches), desc=desc):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, len(all_prompts))
+
+        batch_prompts = all_prompts[start_idx:end_idx]
+        batch_questions = all_questions[start_idx:end_idx]
+        batch_ground_truths = all_ground_truths[start_idx:end_idx]
+
+        # Tokenize batch with padding
+        inputs = tokenizer(
+            batch_prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(model.device)
 
         with torch.no_grad():
             outputs = model.generate(
@@ -74,31 +101,36 @@ def evaluate_model(model, tokenizer, dataset, max_new_tokens, desc="Evaluating")
                 pad_token_id=tokenizer.pad_token_id,
             )
 
-        response = tokenizer.decode(
-            outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
-        )
+        # Decode each response in the batch
+        for i, (output, question, ground_truth) in enumerate(
+            zip(outputs, batch_questions, batch_ground_truths)
+        ):
+            # Get only the generated part (after the prompt)
+            prompt_len = inputs["input_ids"][i].ne(tokenizer.pad_token_id).sum()
+            response = tokenizer.decode(output[prompt_len:], skip_special_tokens=True)
 
-        extracted = extract_xml_answer(response)
-        has_format = check_format(response)
-        is_correct = extracted == ground_truth
+            extracted = extract_xml_answer(response)
+            has_format = check_format(response)
+            is_correct = extracted == ground_truth
 
-        if has_format:
-            format_correct += 1
-        if is_correct:
-            correct += 1
-        total += 1
+            if has_format:
+                format_correct += 1
+            if is_correct:
+                correct += 1
+            total += 1
 
-        results.append({
-            "question": question,
-            "ground_truth": ground_truth,
-            "response": response,
-            "extracted": extracted,
-            "is_correct": is_correct,
-            "has_format": has_format,
-        })
+            results.append({
+                "question": question,
+                "ground_truth": ground_truth,
+                "response": response,
+                "extracted": extracted,
+                "is_correct": is_correct,
+                "has_format": has_format,
+            })
 
-        if (i + 1) % 50 == 0:
-            print(f"\n[{i+1}/{len(dataset)}] Running accuracy: {correct/total:.2%}, Format: {format_correct/total:.2%}")
+        # Progress update
+        if (batch_idx + 1) % 10 == 0 or batch_idx == num_batches - 1:
+            print(f"\n[{total}/{len(dataset)}] Running accuracy: {correct/total:.2%}, Format: {format_correct/total:.2%}")
 
     return {
         "accuracy": correct / total if total > 0 else 0,
@@ -120,7 +152,7 @@ def print_results(name, metrics):
     print(f"Correct format: {metrics['format_correct']} ({metrics['format_accuracy']:.2%})")
 
 
-def evaluate(config: dict, model_path: str = None, max_samples: int = None, max_new_tokens: int = 512):
+def evaluate(config: dict, model_path: str = None, max_samples: int = None, max_new_tokens: int = 512, batch_size: int = 8):
     """Run evaluation comparing base model vs fine-tuned model."""
     model_config = config["model"]
     training_config = config["training"]
@@ -157,7 +189,7 @@ def evaluate(config: dict, model_path: str = None, max_samples: int = None, max_
     if max_samples is not None:
         dataset = dataset.select(range(min(max_samples, len(dataset))))
 
-    print(f"Evaluating on {len(dataset)} samples...")
+    print(f"Evaluating on {len(dataset)} samples (batch_size={batch_size})...")
 
     # Evaluate base model first
     print("\n" + "=" * 50)
@@ -165,7 +197,7 @@ def evaluate(config: dict, model_path: str = None, max_samples: int = None, max_
     print("=" * 50)
     model.eval()
     base_metrics = evaluate_model(
-        model, tokenizer, dataset, max_new_tokens, desc="Base Model"
+        model, tokenizer, dataset, max_new_tokens, batch_size=batch_size, desc="Base Model"
     )
     print_results("BASE MODEL", base_metrics)
 
@@ -180,7 +212,7 @@ def evaluate(config: dict, model_path: str = None, max_samples: int = None, max_
         model.eval()
 
         finetuned_metrics = evaluate_model(
-            model, tokenizer, dataset, max_new_tokens, desc=f"{method} Model"
+            model, tokenizer, dataset, max_new_tokens, batch_size=batch_size, desc=f"{method} Model"
         )
         print_results(f"{method} MODEL", finetuned_metrics)
 
@@ -256,6 +288,7 @@ def main():
         model_path=args.model_path,
         max_samples=args.max_samples,
         max_new_tokens=args.max_new_tokens,
+        batch_size=args.batch_size,
     )
 
 
